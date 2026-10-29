@@ -1,4 +1,6 @@
-import sys
 
-print("Fermec ARGE projesi basladi")
-print("Kullanılan Python surumu:", sys.version)
+import pymupdf
+
+print("Fermec ARGE projesi basladi!")
+print("PDF kutuphanesi basariyla yuklendi.")
+print("Kutuphane surumu:", pymupdf.VersionBind)

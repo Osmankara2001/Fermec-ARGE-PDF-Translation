@@ -4,3 +4,15 @@ __pycache__/
 *.py[cod]
 .env
 .pytest_cache/
+
+
+# Test PDF dosyalari
+input/*.pdf
+ornek.pdf
+
+# Uretilen ciktilar
+output/*
+!output/.gitkeep
+
+# Yedek dosyalar
+pdf_oku.py.yedek

@@ -11,13 +11,15 @@ if not pdf_dosyalari:
     print("HATA: input klasorunde PDF dosyasi bulunamadi.")
     raise SystemExit(1)
 
-pdf_yolu = pdf_dosyalari[0]
+pdf_yolu = girdi_klasoru / "fermec_ornek.pdf"
 print("Okunacak PDF:", pdf_yolu.name)
 
 try:
     with pymupdf.open(pdf_yolu) as belge:
         print("PDF basariyla acildi!")
         print("Toplam sayfa:", len(belge))
+
+        
 
         if len(belge) == 0:
             print("UYARI: PDF dosyasinda sayfa yok.")
