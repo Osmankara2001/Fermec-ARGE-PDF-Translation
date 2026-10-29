@@ -24,11 +24,13 @@ try:
 
         for sayfa_no, sayfa in enumerate(belge, start=1):
             metin = sayfa.get_text().strip()
+            gorsel_sayisi = len(sayfa.get_images())
             bloklar = sayfa.get_text("blocks")
 
             print(f"\n--- SAYFA {sayfa_no} ---")
             print("Metin blogu sayisi:", len(bloklar))
             print("Metin karakter sayisi:", len(metin))
+            print("Gorsel sayisi:", gorsel_sayisi)
 
             if not metin:
                 print(
