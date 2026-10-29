@@ -3,11 +3,17 @@ from pathlib import Path
 
 import pymupdf
 
-pdf_yolu = Path("ornek.pdf")
+girdi_klasoru = Path("input")
 
-if not pdf_yolu.exists():
-    print(f"HATA: PDF dosyasi bulunamadi: {pdf_yolu}")
+pdf_dosyalari = sorted(girdi_klasoru.glob("*.pdf"))
+
+if not pdf_dosyalari:
+    print("HATA: input klasorunde PDF dosyasi bulunamadi.")
     raise SystemExit(1)
+
+pdf_yolu = pdf_dosyalari[0]
+
+print("Okunacak PDF:", pdf_yolu.name)
 
 with pymupdf.open(pdf_yolu) as belge:
     print("PDF basariyla acildi!")
