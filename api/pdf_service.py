@@ -2,6 +2,8 @@
 
 from pathlib import Path
 import pymupdf
+import subprocess
+import tempfile
 
 PARCA_BOYUTU = 5
 
@@ -157,3 +159,100 @@ def pdf_parca_kalite_kontrol(
         "sayfa_kontrolleri": kontroller,
     }
 
+def pdf_sayfa_ocr(
+    pdf_yolu: Path,
+    sayfa_no: int,
+    dil: str = "eng",
+) -> dict:
+    if not pdf_yolu.is_file():
+        raise FileNotFoundError(f"PDF dosyasi bulunamadi: {pdf_yolu}")
+
+    if dil not in {"eng", "tur"}:
+        raise ValueError("Desteklenmeyen OCR dili.")
+
+    with pymupdf.open(pdf_yolu) as belge:
+        if sayfa_no < 1 or sayfa_no > len(belge):
+            raise ValueError("Sayfa numarasi PDF sinirlarinin disinda.")
+
+        sayfa = belge[sayfa_no - 1]
+
+        # OCR icin sayfayi gecici olarak yuksek cozunurlukte goruntuye cevir.
+        pix = sayfa.get_pixmap(dpi=300, alpha=False)
+
+        with tempfile.TemporaryDirectory() as gecici_klasor:
+            png_yolu = Path(gecici_klasor) / "sayfa.png"
+            pix.save(str(png_yolu))
+
+            sonuc = subprocess.run(
+                [
+                    "tesseract",
+                    str(png_yolu),
+                    "stdout",
+                    "-l",
+                    dil,
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            if sonuc.returncode != 0:
+                raise RuntimeError(
+                    f"Tesseract OCR hatasi: {sonuc.stderr.strip()}"
+                )
+
+            ocr_metni = sonuc.stdout.strip()
+
+    return {
+        "dosya": pdf_yolu.name,
+        "sayfa_no": sayfa_no,
+        "ocr_dili": dil,
+        "karakter_sayisi": len(ocr_metni),
+        "metin": ocr_metni,
+    }
+
+def pdf_parca_metin_hazirla(
+    pdf_yolu: Path,
+    baslangic_sayfasi: int,
+    bitis_sayfasi: int,
+) -> dict:
+    parca = pdf_parca_metni_al(
+        pdf_yolu,
+        baslangic_sayfasi,
+        bitis_sayfasi,
+    )
+
+    hazir_sayfalar = []
+
+    for sayfa in parca["sayfalar"]:
+        sayfa_turu = sayfa["sayfa_turu"]
+        kaynak = "pdf_metin"
+        metin = sayfa["metin"]
+        ocr_kullanildi = False
+
+        if sayfa_turu == "taranmis_adayi":
+            ocr_sonucu = pdf_sayfa_ocr(
+                pdf_yolu,
+                sayfa["sayfa_no"],
+                dil="eng",
+            )
+
+            metin = ocr_sonucu["metin"]
+            kaynak = "ocr"
+            ocr_kullanildi = True
+
+        hazir_sayfalar.append({
+            "sayfa_no": sayfa["sayfa_no"],
+            "sayfa_turu": sayfa_turu,
+            "metin_kaynagi": kaynak,
+            "ocr_kullanildi": ocr_kullanildi,
+            "karakter_sayisi": len(metin),
+            "metin": metin,
+        })
+
+    return {
+        "dosya": parca["dosya"],
+        "baslangic_sayfasi": baslangic_sayfasi,
+        "bitis_sayfasi": bitis_sayfasi,
+        "sayfalar": hazir_sayfalar,
+    }

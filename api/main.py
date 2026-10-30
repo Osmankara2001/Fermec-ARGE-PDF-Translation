@@ -9,6 +9,8 @@ from pdf_service import (
     pdf_analiz_et,
     pdf_parca_metni_al,
     pdf_parca_kalite_kontrol,
+    pdf_sayfa_ocr,
+    pdf_parca_metin_hazirla,
 )
 
 app = FastAPI(title="Fermec ARGE API")
@@ -349,3 +351,60 @@ def pdf_parca_kalite_kontrol_et(parca_no: int):
         raise HTTPException(status_code=404, detail=str(hata))
     except ValueError as hata:
         raise HTTPException(status_code=400, detail=str(hata))
+
+@app.get("/pdf/ocr/{sayfa_no}")
+def pdf_ocr_yap(sayfa_no: int):
+    pdf_yolu = INPUT_DIR / "fermec_ornek.pdf"
+
+    try:
+        return pdf_sayfa_ocr(
+            pdf_yolu=pdf_yolu,
+            sayfa_no=sayfa_no,
+            dil="eng",
+        )
+    except FileNotFoundError as hata:
+        raise HTTPException(status_code=404, detail=str(hata))
+    except ValueError as hata:
+        raise HTTPException(status_code=400, detail=str(hata))
+    except RuntimeError as hata:
+        raise HTTPException(status_code=500, detail=str(hata))
+
+
+@app.get("/pdf/chunk/{parca_no}/prepare")
+def pdf_parca_hazirla(parca_no: int):
+    if parca_no < 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Parca numarasi pozitif olmalidir.",
+        )
+
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+
+        parca = conn.execute(
+            """
+            SELECT dosya_adi, baslangic_sayfasi, bitis_sayfasi
+            FROM pdf_parcalari
+            WHERE dosya_adi = ? AND parca_no = ?
+            """,
+            ("fermec_ornek.pdf", parca_no),
+        ).fetchone()
+
+    if parca is None:
+        raise HTTPException(
+            status_code=404,
+            detail="PDF parcasi bulunamadi.",
+        )
+
+    try:
+        return pdf_parca_metin_hazirla(
+            INPUT_DIR / parca["dosya_adi"],
+            parca["baslangic_sayfasi"],
+            parca["bitis_sayfasi"],
+        )
+    except FileNotFoundError as hata:
+        raise HTTPException(status_code=404, detail=str(hata))
+    except ValueError as hata:
+        raise HTTPException(status_code=400, detail=str(hata))
+    except RuntimeError as hata:
+        raise HTTPException(status_code=500, detail=str(hata))
