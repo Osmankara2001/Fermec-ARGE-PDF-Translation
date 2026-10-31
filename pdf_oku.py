@@ -1,49 +1,72 @@
 
 
-from pathlib import Path
 
+from pathlib import Path
 import pymupdf
 
-girdi_klasoru = Path("input")
-pdf_dosyalari = sorted(girdi_klasoru.glob("*.pdf"))
 
-if not pdf_dosyalari:
-    print("HATA: input klasorunde PDF dosyasi bulunamadi.")
-    raise SystemExit(1)
+def pdf_analiz_et(pdf_yolu: Path) -> dict:
+    """PDF dosyasini analiz eder ve sonucunu sozluk olarak dondurur."""
 
-pdf_yolu = girdi_klasoru / "fermec_ornek.pdf"
-print("Okunacak PDF:", pdf_yolu.name)
+    if not pdf_yolu.is_file():
+        raise FileNotFoundError(
+            f"PDF dosyasi bulunamadi: {pdf_yolu}"
+        )
 
-try:
+    sayfalar = []
+
     with pymupdf.open(pdf_yolu) as belge:
-        print("PDF basariyla acildi!")
-        print("Toplam sayfa:", len(belge))
-
-        
-
-        if len(belge) == 0:
-            print("UYARI: PDF dosyasinda sayfa yok.")
-
         for sayfa_no, sayfa in enumerate(belge, start=1):
             metin = sayfa.get_text().strip()
-            gorsel_sayisi = len(sayfa.get_images())
             bloklar = sayfa.get_text("blocks")
+            gorsel_sayisi = len(sayfa.get_images())
 
-            print(f"\n--- SAYFA {sayfa_no} ---")
-            print("Metin blogu sayisi:", len(bloklar))
-            print("Metin karakter sayisi:", len(metin))
-            print("Gorsel sayisi:", gorsel_sayisi)
+            sayfalar.append({
+                "sayfa_no": sayfa_no,
+                "metin": metin,
+                "metin_blok_sayisi": len(bloklar),
+                "karakter_sayisi": len(metin),
+                "gorsel_sayisi": gorsel_sayisi,
+                "uyari": (
+                    "Metin bulunamadi; sayfa bos veya taranmis olabilir."
+                    if not metin else None
+                ),
+            })
 
-            if not metin:
-                print(
-                    "UYARI: Metin bulunamadi. "
-                    "Sayfa bos veya taranmis olabilir."
-                )
+        return {
+            "dosya": pdf_yolu.name,
+            "toplam_sayfa": len(belge),
+            "sayfalar": sayfalar,
+        }
+
+
+def main():
+    pdf_yolu = Path("input") / "fermec_ornek.pdf"
+
+    try:
+        sonuc = pdf_analiz_et(pdf_yolu)
+
+        print("PDF basariyla analiz edildi!")
+        print("Dosya:", sonuc["dosya"])
+        print("Toplam sayfa:", sonuc["toplam_sayfa"])
+
+        for sayfa in sonuc["sayfalar"]:
+            print(f"\n--- SAYFA {sayfa['sayfa_no']} ---")
+            print("Metin blogu:", sayfa["metin_blok_sayisi"])
+            print("Karakter:", sayfa["karakter_sayisi"])
+            print("Gorsel:", sayfa["gorsel_sayisi"])
+
+            if sayfa["uyari"]:
+                print("UYARI:", sayfa["uyari"])
             else:
-                print("Metnin ilk 200 karakteri:")
-                print(metin[:200])
+                print("Ilk 200 karakter:")
+                print(sayfa["metin"][:200])
 
-except Exception as hata:
-    print("HATA: PDF okunamadi.")
-    print("Detay:", hata)
-    raise SystemExit(1)
+    except Exception as hata:
+        print("HATA: PDF analiz edilemedi.")
+        print("Detay:", hata)
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()

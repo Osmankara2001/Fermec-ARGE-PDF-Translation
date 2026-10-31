@@ -6,6 +6,9 @@ services:
     container_name: fermec-api
     ports:
       - "8000:8000"
+    volumes:
+      - fermec_data:/data
+      - ./input:/input:ro
     restart: unless-stopped
 
   n8n:
@@ -24,3 +27,4 @@ services:
 
 volumes:
   n8n_data:
+  fermec_data:
