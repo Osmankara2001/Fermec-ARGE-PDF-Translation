@@ -1,6 +1,8 @@
+import re
 from typing import TypedDict
 
 from langgraph.graph import END, StateGraph
+
 
 
 class MetinBlogu(TypedDict):
@@ -60,10 +62,25 @@ def rule_validation(state: CeviriState):
             "Kaynak ve ceviri blok ID'leri eslesmiyor."
         )
 
+    for blok in state["ceviri_bloklari"]:
+        kaynak_sayilar = re.findall(
+            r"\d+(?:[.,]\d+)?",
+            blok["kaynak_metin"],
+        )
+
+        ceviri_sayilar = re.findall(
+            r"\d+(?:[.,]\d+)?",
+            blok["ceviri"],
+        )
+
+        if kaynak_sayilar != ceviri_sayilar:
+            raise ValueError(
+                f"Sayi kontrolu basarisiz: {blok['id']}"
+            )
+
     return {
         "durum": "kurallar_kontrol_edildi",
     }
-
 
 def model_review(state: CeviriState):
     return {
