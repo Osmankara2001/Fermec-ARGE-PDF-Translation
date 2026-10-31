@@ -25,6 +25,20 @@ services:
       - n8n_data:/home/node/.n8n
     restart: unless-stopped
 
+  ceviri-servisi:
+    build:
+      context: ./ceviri-servisi
+    container_name: fermec-ceviri-servisi
+    ports:
+      - "8001:8001"
+    restart: unless-stopped
+
+
+
+
+
+
+
 volumes:
   n8n_data:
   fermec_data:
