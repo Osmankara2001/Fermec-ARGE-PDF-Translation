@@ -256,3 +256,234 @@ def pdf_parca_metin_hazirla(
         "bitis_sayfasi": bitis_sayfasi,
         "sayfalar": hazir_sayfalar,
     }
+
+def dikdortgenler_cakisiyor(
+    bbox1: tuple,
+    bbox2: tuple,
+) -> bool:
+    x0_1, y0_1, x1_1, y1_1 = bbox1
+    x0_2, y0_2, x1_2, y1_2 = bbox2
+
+    return not (
+        x1_1 <= x0_2
+        or x1_2 <= x0_1
+        or y1_1 <= y0_2
+        or y1_2 <= y0_1
+    )
+
+def pdf_metin_bloklarini_al(
+    pdf_yolu: Path,
+    sayfa_no: int,
+) -> dict:
+    if not pdf_yolu.is_file():
+        raise FileNotFoundError(f"PDF dosyasi bulunamadi: {pdf_yolu}")
+
+    with pymupdf.open(pdf_yolu) as belge:
+        if sayfa_no < 1 or sayfa_no > len(belge):
+            raise ValueError("Sayfa numarasi PDF sinirlarinin disinda.")
+
+        sayfa = belge[sayfa_no - 1]
+
+        # Sayfadaki tablo alanlarini bul.
+        bulunan_tablolar = sayfa.find_tables()
+
+        tablo_bboxlari = [
+            tuple(tablo.bbox)
+            for tablo in bulunan_tablolar.tables
+        ]
+
+        ham_bloklar = sayfa.get_text("blocks")
+
+        bloklar = []
+        tablo_ici_blok_sayisi = 0
+
+        for blok in ham_bloklar:
+            x0, y0, x1, y1, metin = blok[:5]
+            metin = metin.strip()
+
+            if not metin:
+                continue
+
+            blok_bbox = (x0, y0, x1, y1)
+
+            tablo_ile_cakisiyor = any(
+                dikdortgenler_cakisiyor(
+                    blok_bbox,
+                    tablo_bbox,
+                )
+                for tablo_bbox in tablo_bboxlari
+            )
+
+            if tablo_ile_cakisiyor:
+                tablo_ici_blok_sayisi += 1
+                continue
+
+            blok_id = (
+                f"P{sayfa_no:04d}_"
+                f"B{len(bloklar) + 1:04d}"
+            )
+
+            bloklar.append({
+                "id": blok_id,
+                "sayfa_no": sayfa_no,
+                "tur": "metin",
+                "bbox": [
+                    round(x0, 2),
+                    round(y0, 2),
+                    round(x1, 2),
+                    round(y1, 2),
+                ],
+                "metin": metin,
+            })
+
+    return {
+        "dosya": pdf_yolu.name,
+        "sayfa_no": sayfa_no,
+        "blok_sayisi": len(bloklar),
+        "tablo_ici_blok_sayisi": tablo_ici_blok_sayisi,
+        "bloklar": bloklar,
+    }
+
+
+def pdf_tablolarini_cikar(
+    pdf_yolu: Path,
+    sayfa_no: int,
+) -> dict:
+    if not pdf_yolu.is_file():
+        raise FileNotFoundError(f"PDF dosyasi bulunamadi: {pdf_yolu}")
+
+    with pymupdf.open(pdf_yolu) as belge:
+        if sayfa_no < 1 or sayfa_no > len(belge):
+            raise ValueError("Sayfa numarasi PDF sinirlarinin disinda.")
+
+        sayfa = belge[sayfa_no - 1]
+
+        bulunan = sayfa.find_tables()
+        sayfa_kelimeleri = sayfa.get_text("words")
+
+        tablolar = []
+
+        for tablo_no, tablo in enumerate(bulunan.tables, start=1):
+            satir_sayisi = tablo.row_count
+            sutun_sayisi = tablo.col_count
+
+            hucre_verileri = []
+
+            for hucre in tablo.cells:
+                if hucre is None:
+                    hucre_verileri.append(None)
+                    continue
+
+                x0, y0, x1, y1 = hucre
+
+                kelimeler = []
+
+                for kelime in sayfa_kelimeleri:
+                    wx0, wy0, wx1, wy1, metin = kelime[:5]
+
+                    merkez_x = (wx0 + wx1) / 2
+                    merkez_y = (wy0 + wy1) / 2
+
+                    if (
+                        x0 <= merkez_x <= x1
+                        and y0 <= merkez_y <= y1
+                    ):
+                        kelimeler.append({
+                            "metin": metin,
+                            "x": wx0,
+                            "y": wy0,
+                        })
+
+                kelimeler.sort(
+                    key=lambda k: (round(k["y"], 1), k["x"])
+                )
+
+                metin = " ".join(
+                    kelime["metin"]
+                    for kelime in kelimeler
+                )
+
+                hucre_verileri.append({
+                    "bbox": [
+                        round(x0, 2),
+                        round(y0, 2),
+                        round(x1, 2),
+                        round(y1, 2),
+                    ],
+                    "metin": metin,
+                })
+
+            satirlar = []
+
+            for satir_no in range(satir_sayisi):
+                hucreler = []
+
+                for sutun_no in range(sutun_sayisi):
+                    indeks = (
+                        sutun_no * satir_sayisi
+                        + satir_no
+                    )
+
+                    hucre = hucre_verileri[indeks]
+
+                    if hucre is None:
+                        continue
+
+                    hucre_id = (
+                        f"P{sayfa_no:04d}_"
+                        f"T{tablo_no:04d}_"
+                        f"R{satir_no + 1:04d}_"
+                        f"C{sutun_no + 1:04d}"
+                    )
+
+                    hucreler.append({
+                        "id": hucre_id,
+                        "satir": satir_no + 1,
+                        "sutun": sutun_no + 1,
+                        "bbox": hucre["bbox"],
+                        "metin": hucre["metin"],
+                    })
+
+                satirlar.append({
+                    "satir": satir_no + 1,
+                    "hucreler": hucreler,
+                })
+
+            tablolar.append({
+                "id": f"P{sayfa_no:04d}_T{tablo_no:04d}",
+                "sayfa_no": sayfa_no,
+                "tablo_no": tablo_no,
+                "satir_sayisi": satir_sayisi,
+                "sutun_sayisi": sutun_sayisi,
+                "satirlar": satirlar,
+            })
+
+    return {
+        "dosya": pdf_yolu.name,
+        "sayfa_no": sayfa_no,
+        "tablo_sayisi": len(tablolar),
+        "tablolar": tablolar,
+    }
+
+def pdf_sayfa_yapisini_cikar(
+    pdf_yolu: Path,
+    sayfa_no: int,
+) -> dict:
+    metin_sonucu = pdf_metin_bloklarini_al(
+        pdf_yolu=pdf_yolu,
+        sayfa_no=sayfa_no,
+    )
+
+    tablo_sonucu = pdf_tablolarini_cikar(
+        pdf_yolu=pdf_yolu,
+        sayfa_no=sayfa_no,
+    )
+
+    return {
+        "dosya": pdf_yolu.name,
+        "sayfa_no": sayfa_no,
+        "metin_blok_sayisi": metin_sonucu["blok_sayisi"],
+        "tablo_sayisi": tablo_sonucu["tablo_sayisi"],
+        "metin_bloklari": metin_sonucu["bloklar"],
+        "tablolar": tablo_sonucu["tablolar"],
+    }

@@ -11,6 +11,8 @@ from pdf_service import (
     pdf_parca_kalite_kontrol,
     pdf_sayfa_ocr,
     pdf_parca_metin_hazirla,
+    pdf_metin_bloklarini_al,
+    pdf_sayfa_yapisini_cikar,
 )
 
 app = FastAPI(title="Fermec ARGE API")
@@ -408,3 +410,39 @@ def pdf_parca_hazirla(parca_no: int):
         raise HTTPException(status_code=400, detail=str(hata))
     except RuntimeError as hata:
         raise HTTPException(status_code=500, detail=str(hata))
+
+@app.get("/pdf/page/{sayfa_no}/blocks")
+def pdf_sayfa_bloklari(sayfa_no: int):
+    pdf_yolu = INPUT_DIR / "fermec_ornek.pdf"
+
+    try:
+        return pdf_metin_bloklarini_al(
+            pdf_yolu=pdf_yolu,
+            sayfa_no=sayfa_no,
+        )
+    except FileNotFoundError as hata:
+        raise HTTPException(status_code=404, detail=str(hata))
+    except ValueError as hata:
+        raise HTTPException(status_code=400, detail=str(hata))
+
+@app.get("/pdf/page/{sayfa_no}/structure")
+def pdf_sayfa_yapisi(sayfa_no: int):
+    pdf_yolu = INPUT_DIR / "fermec_ornek.pdf"
+
+    try:
+        return pdf_sayfa_yapisini_cikar(
+            pdf_yolu=pdf_yolu,
+            sayfa_no=sayfa_no,
+        )
+
+    except FileNotFoundError as hata:
+        raise HTTPException(
+            status_code=404,
+            detail=str(hata),
+        )
+
+    except ValueError as hata:
+        raise HTTPException(
+            status_code=400,
+            detail=str(hata),
+        )
