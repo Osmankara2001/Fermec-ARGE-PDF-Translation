@@ -3,9 +3,20 @@ from typing import TypedDict
 from langgraph.graph import END, StateGraph
 
 
-class CeviriState(TypedDict):
+class MetinBlogu(TypedDict):
+    id: str
+    metin: str
+
+
+class CeviriBlogu(TypedDict):
+    id: str
     kaynak_metin: str
     ceviri: str
+
+
+class CeviriState(TypedDict):
+    bloklar: list[MetinBlogu]
+    ceviri_bloklari: list[CeviriBlogu]
     durum: str
 
 
@@ -16,15 +27,39 @@ def budget_gate(state: CeviriState):
 
 
 def translate(state: CeviriState):
-    # Simdilik gercek AI modeli kullanmiyoruz.
-    # Graph akisinin calistigini test ediyoruz.
+    ceviri_bloklari = []
+
+    for blok in state["bloklar"]:
+        ceviri_bloklari.append({
+            "id": blok["id"],
+            "kaynak_metin": blok["metin"],
+            "ceviri": (
+                f"[TEST CEVIRI] {blok['metin']}"
+            ),
+        })
+
     return {
-        "ceviri": f"[TEST CEVIRI] {state['kaynak_metin']}",
+        "ceviri_bloklari": ceviri_bloklari,
         "durum": "cevrildi",
     }
 
 
 def rule_validation(state: CeviriState):
+    kaynak_idler = [
+        blok["id"]
+        for blok in state["bloklar"]
+    ]
+
+    ceviri_idler = [
+        blok["id"]
+        for blok in state["ceviri_bloklari"]
+    ]
+
+    if kaynak_idler != ceviri_idler:
+        raise ValueError(
+            "Kaynak ve ceviri blok ID'leri eslesmiyor."
+        )
+
     return {
         "durum": "kurallar_kontrol_edildi",
     }

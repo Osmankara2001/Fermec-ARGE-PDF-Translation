@@ -9,8 +9,13 @@ app = FastAPI(
 )
 
 
+class MetinBlogu(BaseModel):
+    id: str
+    metin: str
+
+
 class CeviriIstegi(BaseModel):
-    kaynak_metin: str
+    bloklar: list[MetinBlogu]
 
 
 @app.get("/health")
@@ -24,8 +29,11 @@ def health():
 @app.post("/translate")
 def translate(istek: CeviriIstegi):
     baslangic_state = {
-        "kaynak_metin": istek.kaynak_metin,
-        "ceviri": "",
+        "bloklar": [
+            blok.model_dump()
+            for blok in istek.bloklar
+        ],
+        "ceviri_bloklari": [],
         "durum": "basladi",
     }
 
