@@ -34,6 +34,9 @@ def translate(istek: CeviriIstegi):
             for blok in istek.bloklar
         ],
         "ceviri_bloklari": [],
+        "hatalar": [],
+        "duzeltme_turu": 0,
+        "insan_kontrolu_gerekli": False,
         "durum": "basladi",
     }
 

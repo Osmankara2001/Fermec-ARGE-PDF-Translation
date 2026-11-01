@@ -19,6 +19,9 @@ class CeviriBlogu(TypedDict):
 class CeviriState(TypedDict):
     bloklar: list[MetinBlogu]
     ceviri_bloklari: list[CeviriBlogu]
+    hatalar: list[str]
+    duzeltme_turu: int
+    insan_kontrolu_gerekli: bool
     durum: str
 
 
@@ -84,8 +87,34 @@ def rule_validation(state: CeviriState):
 
 def model_review(state: CeviriState):
     return {
+        "hatalar": [],
         "durum": "model_kontrolunden_gecti",
     }
+
+def fix(state: CeviriState):
+    return {
+        "duzeltme_turu": state["duzeltme_turu"] + 1,
+        "hatalar": [],
+        "durum": "duzeltildi",
+    }
+
+
+def review_karari(state: CeviriState):
+    if not state["hatalar"]:
+        return "approve"
+
+    if state["duzeltme_turu"] < 2:
+        return "fix"
+
+    return "human_review"
+
+
+def human_review(state: CeviriState):
+    return {
+        "insan_kontrolu_gerekli": True,
+        "durum": "insan_kontrolu_gerekli",
+    }
+
 
 
 def approve(state: CeviriState):
@@ -96,58 +125,32 @@ def approve(state: CeviriState):
 
 graph_builder = StateGraph(CeviriState)
 
-graph_builder.add_node(
-    "budget_gate",
-    budget_gate,
-)
+graph_builder.add_node("budget_gate", budget_gate)
+graph_builder.add_node("translate", translate)
+graph_builder.add_node("rule_validation", rule_validation)
+graph_builder.add_node("model_review", model_review)
+graph_builder.add_node("fix", fix)
+graph_builder.add_node("human_review", human_review)
+graph_builder.add_node("approve", approve)
 
-graph_builder.add_node(
-    "translate",
-    translate,
-)
+graph_builder.set_entry_point("budget_gate")
 
-graph_builder.add_node(
-    "rule_validation",
-    rule_validation,
-)
+graph_builder.add_edge("budget_gate", "translate")
+graph_builder.add_edge("translate", "rule_validation")
+graph_builder.add_edge("rule_validation", "model_review")
 
-graph_builder.add_node(
+graph_builder.add_conditional_edges(
     "model_review",
-    model_review,
+    review_karari,
+    {
+        "approve": "approve",
+        "fix": "fix",
+        "human_review": "human_review",
+    },
 )
 
-graph_builder.add_node(
-    "approve",
-    approve,
-)
-
-graph_builder.set_entry_point(
-    "budget_gate"
-)
-
-graph_builder.add_edge(
-    "budget_gate",
-    "translate",
-)
-
-graph_builder.add_edge(
-    "translate",
-    "rule_validation",
-)
-
-graph_builder.add_edge(
-    "rule_validation",
-    "model_review",
-)
-
-graph_builder.add_edge(
-    "model_review",
-    "approve",
-)
-
-graph_builder.add_edge(
-    "approve",
-    END,
-)
+graph_builder.add_edge("fix", "rule_validation")
+graph_builder.add_edge("approve", END)
+graph_builder.add_edge("human_review", END)
 
 ceviri_graph = graph_builder.compile()
