@@ -487,3 +487,90 @@ def pdf_sayfa_yapisini_cikar(
         "metin_bloklari": metin_sonucu["bloklar"],
         "tablolar": tablo_sonucu["tablolar"],
     }
+
+def ceviri_icin_paragraflari_birlestir(bloklar: list[dict]) -> list[dict]:
+    sonuc = []
+
+    for blok in bloklar:
+        metin = " ".join(blok["metin"].split())
+
+        if not metin:
+            continue
+
+        yeni_blok = {
+            **blok,
+            "metin": metin,
+            "kaynak_idler": [blok["id"]],
+        }
+
+        if sonuc:
+            onceki = sonuc[-1]
+
+            onceki_metin = onceki["metin"]
+            onceki_bbox = onceki["bbox"]
+            mevcut_bbox = blok["bbox"]
+
+            yatay_hizali = abs(
+                onceki_bbox[0] - mevcut_bbox[0]
+            ) < 15
+
+            dikey_yakin = (
+                0 <= mevcut_bbox[1] - onceki_bbox[3] < 18
+            )
+
+            onceki_devam_ediyor = not onceki_metin.endswith(
+                (".", "!", "?", ":", ";")
+            )
+            onceki_baslik = (
+            onceki_metin.isupper()
+            and len(onceki_metin) < 100
+            )
+
+            if (
+           yatay_hizali
+           and dikey_yakin
+           and onceki_devam_ediyor
+           and not onceki_baslik
+             ):
+                onceki["metin"] += " " + metin
+                onceki["bbox"] = [
+                    min(onceki_bbox[0], mevcut_bbox[0]),
+                    min(onceki_bbox[1], mevcut_bbox[1]),
+                    max(onceki_bbox[2], mevcut_bbox[2]),
+                    max(onceki_bbox[3], mevcut_bbox[3]),
+                ]
+                onceki["kaynak_idler"].append(blok["id"])
+                continue
+
+        sonuc.append(yeni_blok)
+
+    return sonuc
+
+def matematiksel_formul_mu(metin: str) -> bool:
+    metin = metin.strip()
+
+    if not metin or "\n" in metin:
+        return False
+
+    if "=" not in metin:
+        return False
+
+    if len(metin) > 150:
+        return False
+
+    return any(
+        sembol in metin
+        for sembol in ("=", "^", "/", "*")
+    )
+
+def ceviri_bloklarini_hazirla(bloklar: list[dict]) -> list[dict]:
+    hazir_bloklar = ceviri_icin_paragraflari_birlestir(bloklar)
+
+    for blok in hazir_bloklar:
+        if matematiksel_formul_mu(blok["metin"]):
+            blok["tur"] = "formul"
+            blok["cevrilecek"] = False
+        else:
+            blok["cevrilecek"] = True
+
+    return hazir_bloklar

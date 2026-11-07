@@ -1,7 +1,11 @@
 import re
 from typing import TypedDict
 
+from openai import OpenAI
 from langgraph.graph import END, StateGraph
+import json
+
+client = OpenAI()
 
 
 
@@ -32,16 +36,99 @@ def budget_gate(state: CeviriState):
 
 
 def translate(state: CeviriState):
+    bloklar = state["bloklar"]
+
+    if not bloklar:
+        return {
+            "ceviri_bloklari": [],
+            "durum": "cevrildi",
+        }
+
+    gonderilecek = [
+        {
+            "id": blok["id"],
+            "metin": blok["metin"],
+        }
+        for blok in bloklar
+    ]
+
+    response = client.responses.create(
+        model="gpt-6-luna",
+        instructions=(
+            "You are a professional English-to-Turkish "
+            "technical book translator. "
+            "Translate each input block into Turkish. "
+            "Preserve all numbers, units, formulas, codes, "
+            "URLs and identifiers exactly. "
+            "Do not merge, remove or reorder blocks. "
+            "Return a JSON object containing a 'translations' "
+            "array. Each item must contain the original 'id' "
+            "and its Turkish 'ceviri'. "
+            "Return only valid JSON."
+        ),
+        input=json.dumps(gonderilecek, ensure_ascii=False),
+        text={
+            "format": {
+                "type": "json_schema",
+                "name": "translation_batch",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "translations": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "id": {"type": "string"},
+                                    "ceviri": {"type": "string"},
+                                },
+                                "required": ["id", "ceviri"],
+                                "additionalProperties": False,
+                            },
+                        },
+                    },
+                    "required": ["translations"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        max_output_tokens=3000,
+    )
+
+    if not response.output_text.strip():
+        raise ValueError("OpenAI bos ceviri sonucu dondurdu.")
+
+    sonuc = json.loads(response.output_text)
+    ceviriler = sonuc["translations"]
+
+    kaynak_idler = [blok["id"] for blok in bloklar]
+    ceviri_idler = [blok["id"] for blok in ceviriler]
+
+    if kaynak_idler != ceviri_idler:
+        raise ValueError(
+            "Toplu ceviride blok ID'leri veya sirasi eslesmiyor."
+        )
+
     ceviri_bloklari = []
 
-    for blok in state["bloklar"]:
+    for kaynak, sonuc_blok in zip(bloklar, ceviriler):
+        if not sonuc_blok["ceviri"].strip():
+            raise ValueError(
+                f"Bos ceviri sonucu: {kaynak['id']}"
+            )
+
         ceviri_bloklari.append({
-            "id": blok["id"],
-            "kaynak_metin": blok["metin"],
-            "ceviri": (
-                f"[TEST CEVIRI] {blok['metin']}"
-            ),
+            "id": kaynak["id"],
+            "kaynak_metin": kaynak["metin"],
+            "ceviri": sonuc_blok["ceviri"],
         })
+
+    print(
+        f"OpenAI kullanim: "
+        f"{response.usage.input_tokens} giris, "
+        f"{response.usage.output_tokens} cikis token"
+    )
 
     return {
         "ceviri_bloklari": ceviri_bloklari,

@@ -13,6 +13,7 @@ from pdf_service import (
     pdf_parca_metin_hazirla,
     pdf_metin_bloklarini_al,
     pdf_sayfa_yapisini_cikar,
+    ceviri_bloklarini_hazirla,
 )
 
 app = FastAPI(title="Fermec ARGE API")
@@ -356,7 +357,7 @@ def pdf_parca_kalite_kontrol_et(parca_no: int):
 
 @app.get("/pdf/ocr/{sayfa_no}")
 def pdf_ocr_yap(sayfa_no: int):
-    pdf_yolu = INPUT_DIR / "fermec_ornek.pdf"
+    pdf_yolu = INPUT_DIR / "fermec_heavy_equipment_6page_pilot.pdf"
 
     try:
         return pdf_sayfa_ocr(
@@ -427,7 +428,7 @@ def pdf_sayfa_bloklari(sayfa_no: int):
 
 @app.get("/pdf/page/{sayfa_no}/structure")
 def pdf_sayfa_yapisi(sayfa_no: int):
-    pdf_yolu = INPUT_DIR / "fermec_ornek.pdf"
+    pdf_yolu = INPUT_DIR / "fermec_heavy_equipment_6page_pilot.pdf"
 
     try:
         return pdf_sayfa_yapisini_cikar(
@@ -446,3 +447,43 @@ def pdf_sayfa_yapisi(sayfa_no: int):
             status_code=400,
             detail=str(hata),
         )
+
+@app.get("/pdf/page/{sayfa_no}/translation-ready")
+def pdf_ceviriye_hazirla(sayfa_no: int):
+    pdf_yolu = INPUT_DIR / "fermec_heavy_equipment_6page_pilot.pdf"
+
+    try:
+        yapi = pdf_sayfa_yapisini_cikar(
+            pdf_yolu=pdf_yolu,
+            sayfa_no=sayfa_no,
+        )
+
+        bloklar = ceviri_bloklarini_hazirla(
+            yapi["metin_bloklari"]
+        )
+
+        return {
+            "dosya": pdf_yolu.name,
+            "sayfa_no": sayfa_no,
+            "toplam_blok": len(bloklar),
+            "cevrilecek_bloklar": [
+                {
+                    "id": blok["id"],
+                    "metin": blok["metin"],
+                    "kaynak_idler": blok["kaynak_idler"],
+                }
+                for blok in bloklar
+                if blok["cevrilecek"]
+            ],
+            "korunan_bloklar": [
+                blok
+                for blok in bloklar
+                if not blok["cevrilecek"]
+            ],
+        }
+
+    except FileNotFoundError as hata:
+        raise HTTPException(status_code=404, detail=str(hata))
+
+    except ValueError as hata:
+        raise HTTPException(status_code=400, detail=str(hata))
