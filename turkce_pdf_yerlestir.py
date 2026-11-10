@@ -55,6 +55,33 @@ try:
     for blok in bloklar:
         bbox = blok["bbox"]
         alan = pymupdf.Rect(bbox)
+                # Sayfanin altindaki dipnotu ayri yerlestir
+        if blok["id"] == "P0002_B0003":
+            dipnot = ceviriler.get(blok["id"])
+
+            if dipnot is None:
+                raise ValueError("Dipnot cevirisi bulunamadi.")
+
+            # Orijinal dipnotun yatay konumunu koru
+            dipnot_alani = pymupdf.Rect(
+                44,
+                yukseklik - 35,
+                genislik - 35,
+                yukseklik - 8,
+            )
+
+            kalan = yeni.insert_textbox(
+                dipnot_alani,
+                dipnot,
+                fontname="arial_tr",
+                fontsize=7,
+                lineheight=1.0,
+            )
+
+            if kalan < 0:
+                print("UYARI: Dipnot sigmadi!")
+
+            continue
 
         if blok["cevrilecek"]:
             metin = ceviriler.get(blok["id"])

@@ -8,6 +8,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY main.py .
 COPY graph.py .
+COPY olcum.py .
 
 EXPOSE 8001
 

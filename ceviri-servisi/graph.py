@@ -4,6 +4,9 @@ from typing import TypedDict
 from openai import OpenAI
 from langgraph.graph import END, StateGraph
 import json
+import time
+from olcum import olcum_kaydet
+
 
 client = OpenAI()
 
@@ -27,6 +30,7 @@ class CeviriState(TypedDict):
     duzeltme_turu: int
     insan_kontrolu_gerekli: bool
     durum: str
+    kullanim: dict
 
 
 def budget_gate(state: CeviriState):
@@ -51,7 +55,7 @@ def translate(state: CeviriState):
         }
         for blok in bloklar
     ]
-
+    baslangic = time.perf_counter()
     response = client.responses.create(
         model="gpt-6-luna",
         instructions=(
@@ -66,6 +70,7 @@ def translate(state: CeviriState):
             "and its Turkish 'ceviri'. "
             "Return only valid JSON."
         ),
+        
         input=json.dumps(gonderilecek, ensure_ascii=False),
         text={
             "format": {
@@ -95,6 +100,7 @@ def translate(state: CeviriState):
         },
         max_output_tokens=3000,
     )
+    gecen_sure = round(time.perf_counter() - baslangic, 3)
 
     if not response.output_text.strip():
         raise ValueError("OpenAI bos ceviri sonucu dondurdu.")
@@ -130,9 +136,19 @@ def translate(state: CeviriState):
         f"{response.usage.output_tokens} cikis token"
     )
 
+    kullanim = {
+        "model": response.model,
+        "giris_token": response.usage.input_tokens,
+        "cikis_token": response.usage.output_tokens,
+        "sure_saniye": gecen_sure,
+    }
+
+    olcum_kaydet(kullanim)
+
     return {
         "ceviri_bloklari": ceviri_bloklari,
         "durum": "cevrildi",
+        "kullanim": kullanim,
     }
 
 

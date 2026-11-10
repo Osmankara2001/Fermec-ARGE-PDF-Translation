@@ -33,6 +33,8 @@ services:
       - "8001:8001"
     environment:
     - OPENAI_API_KEY=${OPENAI_API_KEY}
+    volumes:
+      - ./reports/api_data:/app/data
     restart: unless-stopped
 
 

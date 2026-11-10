@@ -37,11 +37,13 @@ def translate(istek: CeviriIstegi):
         "hatalar": [],
         "duzeltme_turu": 0,
         "insan_kontrolu_gerekli": False,
+        "kullanim": {},
         "durum": "basladi",
     }
 
     sonuc = ceviri_graph.invoke(
         baslangic_state
+        
     )
 
     return sonuc

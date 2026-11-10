@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pymupdf
 
-girdi = Path("input/fermec_ornek.pdf")
+girdi = Path("input/fermec_heavy_equipment_6page_pilot.pdf")
 cikti_klasoru = Path("output")
 cikti = cikti_klasoru / "cift_dilli_test.pdf"
 
@@ -13,7 +13,8 @@ try:
     with pymupdf.open(girdi) as kaynak:
         sonuc = pymupdf.open()
 
-        for sayfa_no, orijinal in enumerate(kaynak, start=1):
+        for sayfa_no in [2]:
+            orijinal = kaynak[sayfa_no - 1]
             genislik = orijinal.rect.width
             yukseklik = orijinal.rect.height
 
