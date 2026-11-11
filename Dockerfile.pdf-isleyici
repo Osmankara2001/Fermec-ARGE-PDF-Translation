@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir \
 COPY otomatik_ceviri.py .
 COPY tablo_isleyici.py .
 COPY tablo_cizici.py .
+COPY gorsel_yerlestirici.py .
 COPY pdf_isleyici.py .
 
 EXPOSE 8002

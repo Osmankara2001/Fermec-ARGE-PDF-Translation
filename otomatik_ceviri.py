@@ -7,6 +7,7 @@ import os
 import re
 from tablo_isleyici import sayfa_tablolarini_cevir
 from tablo_cizici import sayfa_tablolarini_ciz
+from gorsel_yerlestirici import sayfa_gorsellerini_yerlestir
 
 API = os.getenv("PDF_API_URL", "http://localhost:8000")
 CEVIRI = os.getenv("CEVIRI_URL", "http://localhost:8001")
@@ -60,6 +61,17 @@ def cift_dilli_pdf_uret(pdf_yolu, tum_ceviriler,tum_tablolar):
         yeni.insert_font(
             fontname="turkce",
             fontfile=str(font_yolu)
+        )
+                # Orijinal sayfadaki gorselleri sol tarafa aktar.
+        gorsel_sayisi = sayfa_gorsellerini_yerlestir(
+            kaynak,
+            orijinal,
+            yeni
+        )
+
+        print(
+            f"Sayfa {sayfa_no}: "
+            f"{gorsel_sayisi} gorsel yerlestirildi."
         )
         # Bu sayfanin cevrilmis tablolarini al.
         sayfa_tablolari = tum_tablolar.get(
