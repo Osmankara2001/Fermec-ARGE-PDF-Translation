@@ -6,6 +6,10 @@ from langgraph.graph import END, StateGraph
 import json
 import time
 from olcum import olcum_kaydet
+from formul_koruyucu import (
+    formul_satirlarini_koru,
+    formulleri_geri_yerlestir
+)
 
 
 client = OpenAI()
@@ -48,13 +52,21 @@ def translate(state: CeviriState):
             "durum": "cevrildi",
         }
 
-    gonderilecek = [
-        {
+    gonderilecek = []
+    korunan_formuller = {}
+
+    for blok in bloklar:
+        korumali_metin, formuller = formul_satirlarini_koru(
+            blok["metin"]
+        )
+
+        gonderilecek.append({
             "id": blok["id"],
-            "metin": blok["metin"],
-        }
-        for blok in bloklar
-    ]
+            "metin": korumali_metin
+        })
+
+        korunan_formuller[blok["id"]] = formuller
+
     baslangic = time.perf_counter()
     response = client.responses.create(
         model="gpt-6-luna",
@@ -124,10 +136,15 @@ def translate(state: CeviriState):
                 f"Bos ceviri sonucu: {kaynak['id']}"
             )
 
+        duzeltilmis_ceviri = formulleri_geri_yerlestir(
+            sonuc_blok["ceviri"],
+            korunan_formuller[kaynak["id"]]
+        )
+
         ceviri_bloklari.append({
             "id": kaynak["id"],
             "kaynak_metin": kaynak["metin"],
-            "ceviri": sonuc_blok["ceviri"],
+            "ceviri": duzeltilmis_ceviri,
         })
 
     print(
@@ -152,7 +169,10 @@ def translate(state: CeviriState):
     }
 
 
+
 def rule_validation(state: CeviriState):
+    from collections import Counter
+
     kaynak_idler = [
         blok["id"]
         for blok in state["bloklar"]
@@ -179,14 +199,17 @@ def rule_validation(state: CeviriState):
             blok["ceviri"],
         )
 
-        if kaynak_sayilar != ceviri_sayilar:
+        if Counter(kaynak_sayilar) != Counter(ceviri_sayilar):
             raise ValueError(
-                f"Sayi kontrolu basarisiz: {blok['id']}"
+                f"Sayi kontrolu basarisiz: {blok['id']}. "
+                f"Kaynak: {kaynak_sayilar}, "
+                f"Ceviri: {ceviri_sayilar}"
             )
 
     return {
         "durum": "kurallar_kontrol_edildi",
     }
+
 
 def model_review(state: CeviriState):
     return {

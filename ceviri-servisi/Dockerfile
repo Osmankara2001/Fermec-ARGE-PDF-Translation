@@ -9,6 +9,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY main.py .
 COPY graph.py .
 COPY olcum.py .
+COPY formul_koruyucu.py .
 
 EXPOSE 8001
 
