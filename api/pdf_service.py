@@ -4,6 +4,7 @@ from pathlib import Path
 import pymupdf
 import subprocess
 import tempfile
+import re
 
 PARCA_BOYUTU = 5
 
@@ -555,12 +556,18 @@ def matematiksel_formul_mu(metin: str) -> bool:
     if "=" not in metin:
         return False
 
-    if len(metin) > 150:
+    # Aciklama iceren satirlari formul olarak eleme.
+    # Ornek: Calculated Input Power Requirement: Phyd = ...
+    if ":" in metin:
         return False
 
-    return any(
-        sembol in metin
-        for sembol in ("=", "^", "/", "*")
+    # Saf matematiksel ifadeler korunsun.
+    return bool(
+        re.fullmatch(
+            r"[\w\s=+\-*/^().,×÷√∑∫≈≤≥∞πηρ%]+",
+            metin,
+            flags=re.UNICODE
+        )
     )
 
 def ceviri_bloklarini_hazirla(bloklar: list[dict]) -> list[dict]:
