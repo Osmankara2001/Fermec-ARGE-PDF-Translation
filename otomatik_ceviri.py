@@ -296,11 +296,16 @@ def main():
                     tum_tablolar[str(sayfa_no)] = []
 
             except Exception as hata:
-                print(f"UYARI: {hata}")
-
-                tum_ceviriler[str(sayfa_no)] = []
-                  # Bu pencerenin cevirilerini ayri kaydet.
-
+                print(
+                    f"HATA: Sayfa {sayfa_no} islenirken "
+                    f"islem durduruldu: {hata}",
+                    flush=True
+                )
+                raise
+                 
+                 
+            
+         # Bu pencerenin cevirilerini ayri kaydet.
         pencere_cevirileri = {
             str(sayfa): tum_ceviriler.get(str(sayfa), [])
             for sayfa in range(
