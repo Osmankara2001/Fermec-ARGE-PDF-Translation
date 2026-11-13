@@ -316,8 +316,24 @@ def pdf_metin_bloklarini_al(
             )
 
             if tablo_ile_cakisiyor:
-                tablo_ici_blok_sayisi += 1
-                continue
+                # Yalnizca tamamen tablo sinirlari icinde kalan
+                # metin bloklarini tablo isleme sistemine birak.
+                tamamen_tablo_icinde = any(
+                    tablo_bbox[0] <= x0
+                    and tablo_bbox[1] <= y0
+                    and x1 <= tablo_bbox[2]
+                    and y1 <= tablo_bbox[3]
+                    for tablo_bbox in tablo_bboxlari
+                )
+
+                if tamamen_tablo_icinde:
+                    tablo_ici_blok_sayisi += 1
+                    continue
+
+                print(
+                    f"UYARI: Sayfa {sayfa_no}: "
+                    "Tabloyla kismen cakisan metin blogu korundu."
+                )
 
             blok_id = (
                 f"P{sayfa_no:04d}_"
@@ -479,6 +495,55 @@ def pdf_sayfa_yapisini_cikar(
         pdf_yolu=pdf_yolu,
         sayfa_no=sayfa_no,
     )
+    # Tablo icine aktarilan metin bloklarini kontrol et.
+    with pymupdf.open(pdf_yolu) as belge:
+        sayfa = belge[sayfa_no - 1]
+
+        tablo_bboxlari = [
+            tuple(tablo.bbox)
+            for tablo in sayfa.find_tables().tables
+        ]
+
+        for ham_blok in sayfa.get_text("blocks"):
+            x0, y0, x1, y1, metin = ham_blok[:5]
+            metin = metin.strip()
+
+            if not metin:
+                continue
+
+            tamamen_tablo_icinde = any(
+                tx0 <= x0
+                and ty0 <= y0
+                and x1 <= tx1
+                and y1 <= ty1
+                for tx0, ty0, tx1, ty1 in tablo_bboxlari
+            )
+
+            if not tamamen_tablo_icinde:
+                continue
+
+            tablo_metinleri = [
+                hucre["metin"]
+                for tablo in tablo_sonucu["tablolar"]
+                for satir in tablo["satirlar"]
+                for hucre in satir["hucreler"]
+            ]
+
+            kaynak_kelimeler = metin.split()
+            tablo_kelimeleri = " ".join(tablo_metinleri).split()
+
+            eksik_kelimeler = [
+                kelime
+                for kelime in kaynak_kelimeler
+                if kelime not in tablo_kelimeleri
+            ]
+
+            if eksik_kelimeler:
+                print(
+                    f"UYARI: Sayfa {sayfa_no}: "
+                    f"Tabloya aktarilmayan kelimeler: "
+                    f"{eksik_kelimeler}"
+            )
 
     return {
         "dosya": pdf_yolu.name,
