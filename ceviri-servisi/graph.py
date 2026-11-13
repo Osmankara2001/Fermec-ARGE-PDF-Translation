@@ -68,65 +68,100 @@ def translate(state: CeviriState):
         korunan_formuller[blok["id"]] = formuller
 
     baslangic = time.perf_counter()
-    response = client.responses.create(
-        model="gpt-6-luna",
-        instructions=(
-            "You are a professional English-to-Turkish "
-            "technical book translator. "
-            "Translate each input block into Turkish. "
-            "Preserve all numbers, units, formulas, codes, "
-            "URLs and identifiers exactly. "
-            "Do not merge, remove or reorder blocks. "
-            "Return a JSON object containing a 'translations' "
-            "array. Each item must contain the original 'id' "
-            "and its Turkish 'ceviri'. "
-            "Return only valid JSON."
-        ),
-        
-        input=json.dumps(gonderilecek, ensure_ascii=False),
-        text={
-            "format": {
-                "type": "json_schema",
-                "name": "translation_batch",
-                "strict": True,
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "translations": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "id": {"type": "string"},
-                                    "ceviri": {"type": "string"},
+
+    toplam_giris_token = 0
+    toplam_cikis_token = 0
+
+    for deneme in range(1, 4):
+        response = client.responses.create(
+            model="gpt-6-luna",
+            instructions=(
+                "You are a professional English-to-Turkish "
+                "technical book translator. "
+                "Translate every input block into Turkish. "
+                "Preserve numbers, units, formulas, URLs and codes. "
+                "Do not merge or omit any blocks. "
+                "Preserve the exact original block IDs. "
+                "Return translations in the same order as input."
+            ),
+            input=json.dumps(gonderilecek, ensure_ascii=False),
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "name": "translation_batch",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "translations": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "id": {"type": "string"},
+                                        "ceviri": {"type": "string"},
+                                    },
+                                    "required": ["id", "ceviri"],
+                                    "additionalProperties": False,
                                 },
-                                "required": ["id", "ceviri"],
-                                "additionalProperties": False,
                             },
                         },
+                        "required": ["translations"],
+                        "additionalProperties": False,
                     },
-                    "required": ["translations"],
-                    "additionalProperties": False,
-                },
-            }
-        },
-        max_output_tokens=3000,
-    )
+                }
+            },
+            max_output_tokens=6000,
+        )
+
+        if response.usage:
+            toplam_giris_token += response.usage.input_tokens
+            toplam_cikis_token += response.usage.output_tokens
+
+        try:
+            if not response.output_text.strip():
+                raise ValueError("OpenAI bos ceviri sonucu dondurdu.")
+
+            sonuc = json.loads(response.output_text)
+            ceviriler = sonuc["translations"]
+
+            kaynak_idler = [blok["id"] for blok in bloklar]
+            ceviri_idler = [blok["id"] for blok in ceviriler]
+
+            if kaynak_idler != ceviri_idler:
+                raise ValueError(
+                    "Toplu ceviride blok ID'leri veya sirasi eslesmiyor. "
+                    f"Beklenen: {kaynak_idler}, Gelen: {ceviri_idler}"
+                )
+
+            if any(
+                not isinstance(blok.get("ceviri"), str)
+                or not blok["ceviri"].strip()
+                for blok in ceviriler
+            ):
+                raise ValueError("Bos veya gecersiz ceviri blogu.")
+
+            print(
+                f"Ceviri dogrulandi. Deneme: {deneme}",
+                flush=True
+            )
+            break
+
+        except (ValueError, KeyError, TypeError) as hata:
+            print(
+                f"Ceviri denemesi {deneme}/3 basarisiz: {hata}",
+                flush=True
+            )
+
+            if deneme == 3:
+                raise RuntimeError(
+                    "Ceviri 3 denemede dogrulanamadi."
+                ) from hata
+
+            time.sleep(2)
+
     gecen_sure = round(time.perf_counter() - baslangic, 3)
 
-    if not response.output_text.strip():
-        raise ValueError("OpenAI bos ceviri sonucu dondurdu.")
-
-    sonuc = json.loads(response.output_text)
-    ceviriler = sonuc["translations"]
-
-    kaynak_idler = [blok["id"] for blok in bloklar]
-    ceviri_idler = [blok["id"] for blok in ceviriler]
-
-    if kaynak_idler != ceviri_idler:
-        raise ValueError(
-            "Toplu ceviride blok ID'leri veya sirasi eslesmiyor."
-        )
 
     ceviri_bloklari = []
 
@@ -148,15 +183,16 @@ def translate(state: CeviriState):
         })
 
     print(
-        f"OpenAI kullanim: "
-        f"{response.usage.input_tokens} giris, "
-        f"{response.usage.output_tokens} cikis token"
+        f"OpenAI toplam kullanim: "
+        f"{toplam_giris_token} giris, "
+        f"{toplam_cikis_token} cikis token",
+        flush=True
     )
 
     kullanim = {
         "model": response.model,
-        "giris_token": response.usage.input_tokens,
-        "cikis_token": response.usage.output_tokens,
+        "giris_token": toplam_giris_token,
+        "cikis_token": toplam_cikis_token,
         "sure_saniye": gecen_sure,
     }
 
@@ -173,40 +209,108 @@ def translate(state: CeviriState):
 def rule_validation(state: CeviriState):
     from collections import Counter
 
-    kaynak_idler = [
-        blok["id"]
-        for blok in state["bloklar"]
-    ]
-
-    ceviri_idler = [
-        blok["id"]
-        for blok in state["ceviri_bloklari"]
-    ]
+    kaynak_idler = [blok["id"] for blok in state["bloklar"]]
+    ceviri_bloklari = [dict(blok) for blok in state["ceviri_bloklari"]]
+    ceviri_idler = [blok["id"] for blok in ceviri_bloklari]
 
     if kaynak_idler != ceviri_idler:
-        raise ValueError(
-            "Kaynak ve ceviri blok ID'leri eslesmiyor."
-        )
+        raise ValueError("Kaynak ve ceviri blok ID'leri eslesmiyor.")
 
-    for blok in state["ceviri_bloklari"]:
-        kaynak_sayilar = re.findall(
-            r"\d+(?:[.,]\d+)?",
-            blok["kaynak_metin"],
-        )
+    def sayilari_al(metin):
+        return Counter(re.findall(r"\d+(?:[.,]\d+)?", metin))
 
-        ceviri_sayilar = re.findall(
-            r"\d+(?:[.,]\d+)?",
-            blok["ceviri"],
-        )
+    # Yalnizca sayi kontrolu basarisiz olan bloklari tekrar cevir.
+    # Basarili bloklara dokunma; eksik veya fazla sayiyi kabul etme.
+    kullanim = dict(state.get("kullanim") or {})
+    for blok in ceviri_bloklari:
+        kaynak_sayilar = sayilari_al(blok["kaynak_metin"])
+        ceviri_sayilar = sayilari_al(blok["ceviri"])
+        if kaynak_sayilar == ceviri_sayilar:
+            continue
 
-        if Counter(kaynak_sayilar) != Counter(ceviri_sayilar):
+        print(
+            f"Sayi uyusmazligi: {blok['id']}. "
+            f"Kaynak: {dict(kaynak_sayilar)}, "
+            f"Ceviri: {dict(ceviri_sayilar)}",
+            flush=True,
+        )
+        for deneme in range(1, 3):
+            baslangic = time.perf_counter()
+            response = client.responses.create(
+                model="gpt-6-luna",
+                instructions=(
+                    "Translate the source text into natural Turkish. "
+                    "The previous Turkish translation failed numerical validation. "
+                    "Preserve every number exactly, including its spelling, "
+                    "decimal separators, and frequency. Do not introduce "
+                    "any additional numbers. Preserve formulas, units, "
+                    "URLs, and codes. Return only the requested JSON."
+                ),
+                input=json.dumps(
+                    {
+                        "source": blok["kaynak_metin"],
+                        "previous_translation": blok["ceviri"],
+                        "required_numbers": list(kaynak_sayilar.elements()),
+                    },
+                    ensure_ascii=False,
+                ),
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": "number_corrected_translation",
+                        "strict": True,
+                        "schema": {
+                            "type": "object",
+                            "properties": {"ceviri": {"type": "string"}},
+                            "required": ["ceviri"],
+                            "additionalProperties": False,
+                        },
+                    }
+                },
+                max_output_tokens=3000,
+            )
+            gecen_sure = round(time.perf_counter() - baslangic, 3)
+            if response.usage:
+                ek_giris = response.usage.input_tokens
+                ek_cikis = response.usage.output_tokens
+                kullanim["giris_token"] = kullanim.get("giris_token", 0) + ek_giris
+                kullanim["cikis_token"] = kullanim.get("cikis_token", 0) + ek_cikis
+                kullanim["sure_saniye"] = round(
+                    kullanim.get("sure_saniye", 0) + gecen_sure, 3
+                )
+                olcum_kaydet({
+                    "model": response.model,
+                    "giris_token": ek_giris,
+                    "cikis_token": ek_cikis,
+                    "sure_saniye": gecen_sure,
+                })
+
+            try:
+                duzeltilmis = json.loads(response.output_text)["ceviri"]
+                if not isinstance(duzeltilmis, str) or not duzeltilmis.strip():
+                    raise ValueError("Bos duzeltme")
+                if sayilari_al(duzeltilmis) != kaynak_sayilar:
+                    raise ValueError("Sayilar hala eslesmiyor")
+            except (ValueError, KeyError, TypeError) as hata:
+                print(
+                    f"Blok {blok['id']}, sayi duzeltme "
+                    f"{deneme}/2 basarisiz: {hata}",
+                    flush=True,
+                )
+                continue
+
+            blok["ceviri"] = duzeltilmis
+            print(f"Blok {blok['id']} sayi kontrolu duzeltildi.", flush=True)
+            break
+        else:
             raise ValueError(
-                f"Sayi kontrolu basarisiz: {blok['id']}. "
-                f"Kaynak: {kaynak_sayilar}, "
-                f"Ceviri: {ceviri_sayilar}"
+                f"Sayi kontrolu iki duzeltmede de basarisiz: {blok['id']}. "
+                f"Kaynak: {dict(kaynak_sayilar)}"
             )
 
     return {
+        "ceviri_bloklari": ceviri_bloklari,
+        "kullanim": kullanim,
         "durum": "kurallar_kontrol_edildi",
     }
 

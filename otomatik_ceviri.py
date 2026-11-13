@@ -62,12 +62,37 @@ def cift_dilli_pdf_uret(pdf_yolu, tum_ceviriler,tum_tablolar):
             fontname="turkce",
             fontfile=str(font_yolu)
         )
-                # Orijinal sayfadaki gorselleri sol tarafa aktar.
-        gorsel_sayisi = sayfa_gorsellerini_yerlestir(
-            kaynak,
-            orijinal,
-            yeni
+        # Tamamen taranmis sayfalarda orijinal goruntu,
+        # Ingilizce metinleri de icerdigi icin sol tarafa kopyalanmaz.
+        # Sag taraftaki orijinal sayfa her durumda korunur.
+
+        # API tarafindaki OCR karar kuraliyla ayni kontrol.
+        secilebilir_metin = orijinal.get_text().strip()
+
+        sayfa_gorsel_var = bool(
+            orijinal.get_images(full=True)
         )
+
+        taranmis_sayfa = (
+            not secilebilir_metin
+            or (
+                sayfa_gorsel_var
+                and len(secilebilir_metin) < 150
+            )
+        )
+
+        if taranmis_sayfa:
+            gorsel_sayisi = 0
+            print(
+                f"Sayfa {sayfa_no}: Taranmis sayfa algilandi. "
+                "Orijinal goruntu sol tarafa kopyalanmadi."
+            )
+        else:
+            gorsel_sayisi = sayfa_gorsellerini_yerlestir(
+                kaynak,
+                orijinal,
+                yeni
+            )
 
         print(
             f"Sayfa {sayfa_no}: "
@@ -85,38 +110,141 @@ def cift_dilli_pdf_uret(pdf_yolu, tum_ceviriler,tum_tablolar):
             font_adi="turkce"
         )
         ceviriler = tum_ceviriler.get(str(sayfa_no), [])
+        # Metin bloklarini sayfadaki dikey konumlarina gore sirala.
+        ceviriler = sorted(
+            ceviriler,
+                key=lambda blok: min(
+                (bbox[1] for bbox in blok.get("kaynak_bboxlar", [])),
+                 default=float("inf")
+                )
+            )
+        if taranmis_sayfa:
+            # OCR bloklarini once gecici sayfada dene. Boylece tek bir
+            # blok bile tasarsa eksik veya ust uste binmis PDF olusmaz.
+            # Tum bloklarda ayni puntoyu kullanarak sayfayi sigdir.
+            if sayfa_tablolari:
+                print(
+                    f"UYARI: Sayfa {sayfa_no}: OCR sayfasinda tablo var; "
+                    "metin ile tablo cakisabilir.",
+                    flush=True,
+                )
 
-        for blok in ceviriler:
+            yerlestirme_plani = None
+            for font_boyutu in (10, 9, 8, 7, 6, 5, 4):
+                deneme_pdf = pymupdf.open()
+                deneme_sayfasi = deneme_pdf.new_page(
+                    width=genislik, height=yukseklik
+                )
+                deneme_sayfasi.insert_font(
+                    fontname="turkce", fontfile=str(font_yolu)
+                )
+                plan = []
+                son_y = 25.0
+                uygun = True
+
+                for blok in ceviriler:
+                    metin = blok.get("ceviri", "").strip()
+                    if not metin:
+                        continue
+                    bboxlar = blok.get("kaynak_bboxlar", [])
+                    if not bboxlar:
+                        deneme_pdf.close()
+                        raise RuntimeError(
+                            f"Sayfa {sayfa_no}, blok {blok.get('id')}: "
+                            "Konum bilgisi bulunamadi."
+                        )
+
+                    # Tam genislik, kaynak metnin yatay hizasina yakin.
+                    x0 = max(25.0, min(float(b[0]) for b in bboxlar))
+                    x0 = min(x0, genislik - 75.0)
+                    x1 = genislik - 25.0
+                    y0 = son_y
+                    y1 = yukseklik - 25.0
+                    if x1 <= x0 or y1 <= y0:
+                        uygun = False
+                        break
+                    alan = pymupdf.Rect(x0, y0, x1, y1)
+                    kalan = deneme_sayfasi.insert_textbox(
+                        alan,
+                        metin,
+                        fontsize=font_boyutu,
+                        fontname="turkce",
+                        lineheight=1.1,
+                    )
+                    if kalan < 0:
+                        uygun = False
+                        break
+
+                    plan.append((alan, metin))
+                    # insert_textbox sonucu basarida kullanilmayan
+                    # dikey alandir; bir sonraki blok icin yer ayir.
+                    son_y = alan.y1 - kalan + max(3.0, font_boyutu * 0.5)
+
+                deneme_pdf.close()
+                if uygun:
+                    yerlestirme_plani = (font_boyutu, plan)
+                    break
+
+            if yerlestirme_plani is None:
+                raise RuntimeError(
+                    f"Sayfa {sayfa_no}: OCR cevirisi 4 puntoya kadar "
+                    "denendi ancak sigmadi. Metin kaybi engellendi."
+                )
+
+            font_boyutu, plan = yerlestirme_plani
+            if font_boyutu < 10:
+                print(
+                    f"UYARI: Sayfa {sayfa_no}: OCR metni "
+                    f"{font_boyutu} puntoya kucultuldu.",
+                    flush=True,
+                )
+            for alan, metin in plan:
+                sonuc = yeni.insert_textbox(
+                    alan,
+                    metin,
+                    fontsize=font_boyutu,
+                    fontname="turkce",
+                    lineheight=1.1,
+                    overlay=True,
+                )
+                if sonuc < 0:
+                    raise RuntimeError(
+                        f"Sayfa {sayfa_no}: OCR yerlesimi "
+                        "on kontrolden farkli sonuc verdi."
+                    )
+            continue
+
+        # Metin tabanli PDF'lerde onceki konum koruma mantigi.
+        for blok_index, blok in enumerate(ceviriler):
             metin = blok.get("ceviri", "").strip()
             bboxlar = blok.get("kaynak_bboxlar", [])
-
             if not metin:
                 continue
-
             if not bboxlar:
-                print(
-                    f"UYARI: Sayfa {sayfa_no}, "
-                    f"{blok.get('id')} konum bilgisi yok."
+                raise RuntimeError(
+                    f"Sayfa {sayfa_no}, blok {blok.get('id')}: "
+                    "Konum bilgisi bulunamadi. Metin kaybi onlendi."
                 )
-                continue
 
-            # Birlesmis kaynak bloklarinin tamamini kapsayan alan.
             x0 = min(bbox[0] for bbox in bboxlar)
             y0 = min(bbox[1] for bbox in bboxlar)
             x1 = max(bbox[2] for bbox in bboxlar)
             y1 = max(bbox[3] for bbox in bboxlar)
-
-            # Turkce metin daha uzun olabilecegi icin
-            # kutuyu sag tarafa dogru genislet.
             x1 = min(genislik - 25, max(x1, x0 + 100))
 
-            alan = pymupdf.Rect(
-                x0, y0,
-                x1, y1
-            )
+            sonraki_y = yukseklik - 25
+            for sonraki_blok in ceviriler[blok_index + 1:]:
+                sonraki_bboxlar = sonraki_blok.get("kaynak_bboxlar", [])
+                if sonraki_bboxlar:
+                    sonraki_y = min(bbox[1] for bbox in sonraki_bboxlar)
+                    break
+
+            guvenli_alt = min(yukseklik - 25, sonraki_y - 8)
+            if guvenli_alt > y1:
+                y1 = guvenli_alt
+            alan = pymupdf.Rect(x0, y0, x1, y1)
 
             yerlesti = False
-
             for font_boyutu in (10, 9, 8, 7, 6, 5):
                 sonuc = yeni.insert_textbox(
                     alan,
@@ -124,17 +252,16 @@ def cift_dilli_pdf_uret(pdf_yolu, tum_ceviriler,tum_tablolar):
                     fontsize=font_boyutu,
                     fontname="turkce",
                     lineheight=1.1,
-                    overlay=True
+                    overlay=True,
                 )
-
                 if sonuc >= 0:
                     yerlesti = True
                     break
-
             if not yerlesti:
-                print(
-                    f"UYARI: Sayfa {sayfa_no}, "
-                    f"{blok.get('id')} metni alana sigmadi."
+                raise RuntimeError(
+                    f"Sayfa {sayfa_no}, blok {blok.get('id')}: "
+                    "Turkce metin alana sigmadi. "
+                    "Eksik PDF olusturulmasi engellendi."
                 )
 
     OUTPUT.mkdir(exist_ok=True)
@@ -202,39 +329,15 @@ def main():
                     for blok in veri["cevrilecek_bloklar"]
                 ]
 
-                # Normal metin yoksa OCR dene.
+                # OCR dahil tum metinler artik API tarafinda
+                # koordinatlariyla birlikte hazirlaniyor.
                 if not bloklar:
                     print(
-                        "Metin bulunamadi. OCR deneniyor..."
+                        f"Sayfa {sayfa_no}: "
+                        "Cevirilecek metin bulunamadi."
                     )
-
-                    ocr = api_get(
-                        f"{API}/pdf/ocr/{sayfa_no}"
-                    )
-
-                    ocr_metni = (
-                        ocr.get("metin") or ""
-                    ).strip()
-
-                    if ocr_metni:
-                        bloklar = [
-                            {
-                                "id": (
-                                    f"P{sayfa_no:04d}_OCR_0001"
-                                ),
-                                "metin": ocr_metni
-                            }
-                        ]
-
-                        print("OCR ile metin bulundu.")
-
-                    else:
-                        print(
-                            "OCR ile de metin bulunamadi."
-                        )
-
-                        tum_ceviriler[str(sayfa_no)] = []
-                        continue
+                    tum_ceviriler[str(sayfa_no)] = []
+                    continue
 
                 # OpenAI ceviri servisine gonder.
                 yanit = requests.post(
@@ -250,6 +353,30 @@ def main():
                 ceviriler = sonuc.get(
                     "ceviri_bloklari", []
                 )
+                # Kaynak ve ceviri bloklarini dogrula.
+                kaynak_idler = [blok["id"] for blok in bloklar]
+                ceviri_idler = [blok["id"] for blok in ceviriler]
+
+                if (
+                    len(kaynak_idler) != len(set(kaynak_idler))
+                    or len(ceviri_idler) != len(set(ceviri_idler))
+                    or set(kaynak_idler) != set(ceviri_idler)
+                ):
+                    raise RuntimeError(
+                        f"Sayfa {sayfa_no}: Ceviri blok kimlikleri "
+                        "kaynak bloklarla eslesmiyor."
+                    )
+
+                for blok in ceviriler:
+                    if not isinstance(blok.get("ceviri"), str) or not blok["ceviri"].strip():
+                        raise RuntimeError(
+                            f"Sayfa {sayfa_no}, blok {blok['id']}: "
+                             "Bos veya gecersiz ceviri."
+                        )
+
+                print(f"Sayfa {sayfa_no}: Ceviri blok kontrolu basarili.")
+
+
 
                 # Kaynak PDF'deki konum bilgilerini eslestir.
                 konumlar = {
@@ -288,12 +415,10 @@ def main():
                     )
 
                 except Exception as tablo_hatasi:
-                    print(
-                        f"UYARI: Sayfa {sayfa_no}, "
-                        f"tablo isleme hatasi: {tablo_hatasi}"
-                    )
-
-                    tum_tablolar[str(sayfa_no)] = []
+                    raise RuntimeError(
+                         f"Sayfa {sayfa_no}: Tablo isleme basarisiz: "
+                         f"{tablo_hatasi}"
+                    ) from tablo_hatasi
 
             except Exception as hata:
                 print(
