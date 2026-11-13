@@ -14,6 +14,7 @@ from pdf_service import (
     pdf_metin_bloklarini_al,
     pdf_sayfa_yapisini_cikar,
     ceviri_bloklarini_hazirla,
+    pdf_tablolarini_cikar,
 )
 
 app = FastAPI(title="Fermec ARGE API")
@@ -127,10 +128,31 @@ def butce_kontrol(istek: HarcamaIstegi):
 
 INPUT_DIR = Path("/input")
 
+def aktif_pdf_yolunu_bul() -> Path:
+    pdf_dosyalari = sorted(INPUT_DIR.glob("*.pdf"))
+
+    if not pdf_dosyalari:
+        raise HTTPException(
+            status_code=404,
+            detail="input klasorunde PDF dosyasi bulunamadi."
+        )
+
+    if len(pdf_dosyalari) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "input klasorunde birden fazla PDF var. "
+                "Lutfen islenecek tek PDF dosyasini birakin."
+            )
+        )
+
+    return pdf_dosyalari[0]
+
+
 
 @app.get("/pdf/analyze")
 def pdf_analiz():
-    pdf_yolu = INPUT_DIR / "fermec_ornek.pdf"
+    pdf_yolu = aktif_pdf_yolunu_bul()
 
     try:
         return pdf_analiz_et(pdf_yolu)
@@ -145,7 +167,7 @@ def pdf_analiz():
 
 @app.post("/pdf/register")
 def pdf_kaydet():
-    pdf_yolu = INPUT_DIR / "fermec_ornek.pdf"
+    aktif_pdf_yolunu_bul()
 
     try:
         analiz = pdf_analiz_et(pdf_yolu)
@@ -295,7 +317,7 @@ def pdf_parca_getir(parca_no: int):
             FROM pdf_parcalari
             WHERE dosya_adi = ? AND parca_no = ?
             """,
-            ("fermec_ornek.pdf", parca_no),
+            (aktif_pdf_yolunu_bul().name, parca_no),
         ).fetchone()
 
     if parca is None:
@@ -335,7 +357,7 @@ def pdf_parca_kalite_kontrol_et(parca_no: int):
             FROM pdf_parcalari
             WHERE dosya_adi = ? AND parca_no = ?
             """,
-            ("fermec_ornek.pdf", parca_no),
+            (aktif_pdf_yolunu_bul().name, parca_no),
         ).fetchone()
 
     if parca is None:
@@ -357,7 +379,7 @@ def pdf_parca_kalite_kontrol_et(parca_no: int):
 
 @app.get("/pdf/ocr/{sayfa_no}")
 def pdf_ocr_yap(sayfa_no: int):
-    pdf_yolu = INPUT_DIR / "fermec_heavy_equipment_6page_pilot.pdf"
+    pdf_yolu = aktif_pdf_yolunu_bul()
 
     try:
         return pdf_sayfa_ocr(
@@ -390,7 +412,7 @@ def pdf_parca_hazirla(parca_no: int):
             FROM pdf_parcalari
             WHERE dosya_adi = ? AND parca_no = ?
             """,
-            ("fermec_ornek.pdf", parca_no),
+            (aktif_pdf_yolunu_bul().name, parca_no),
         ).fetchone()
 
     if parca is None:
@@ -414,7 +436,7 @@ def pdf_parca_hazirla(parca_no: int):
 
 @app.get("/pdf/page/{sayfa_no}/blocks")
 def pdf_sayfa_bloklari(sayfa_no: int):
-    pdf_yolu = INPUT_DIR / "fermec_ornek.pdf"
+    aktif_pdf_yolunu_bul()
 
     try:
         return pdf_metin_bloklarini_al(
@@ -428,7 +450,7 @@ def pdf_sayfa_bloklari(sayfa_no: int):
 
 @app.get("/pdf/page/{sayfa_no}/structure")
 def pdf_sayfa_yapisi(sayfa_no: int):
-    pdf_yolu = INPUT_DIR / "fermec_heavy_equipment_6page_pilot.pdf"
+    aktif_pdf_yolunu_bul()
 
     try:
         return pdf_sayfa_yapisini_cikar(
@@ -450,7 +472,7 @@ def pdf_sayfa_yapisi(sayfa_no: int):
 
 @app.get("/pdf/page/{sayfa_no}/translation-ready")
 def pdf_ceviriye_hazirla(sayfa_no: int):
-    pdf_yolu = INPUT_DIR / "fermec_heavy_equipment_6page_pilot.pdf"
+    pdf_yolu = aktif_pdf_yolunu_bul()
 
     try:
         yapi = pdf_sayfa_yapisini_cikar(
@@ -461,6 +483,11 @@ def pdf_ceviriye_hazirla(sayfa_no: int):
         bloklar = ceviri_bloklarini_hazirla(
             yapi["metin_bloklari"]
         )
+        kaynak_konumlari = {
+            blok["id"]: blok["bbox"]
+            for blok in yapi["metin_bloklari"]
+            if "bbox" in blok
+        }
 
         return {
             "dosya": pdf_yolu.name,
@@ -471,6 +498,11 @@ def pdf_ceviriye_hazirla(sayfa_no: int):
                     "id": blok["id"],
                     "metin": blok["metin"],
                     "kaynak_idler": blok["kaynak_idler"],
+                    "kaynak_bboxlar": [
+                        kaynak_konumlari[kaynak_id]
+                        for kaynak_id in blok["kaynak_idler"]
+                        if kaynak_id in kaynak_konumlari
+                    ],
                 }
                 for blok in bloklar
                 if blok["cevrilecek"]
@@ -487,3 +519,32 @@ def pdf_ceviriye_hazirla(sayfa_no: int):
 
     except ValueError as hata:
         raise HTTPException(status_code=400, detail=str(hata))
+
+
+@app.get("/pdf/page/{sayfa_no}/tables")
+def pdf_sayfa_tablolarini_getir(sayfa_no: int):
+    pdf_yolu = aktif_pdf_yolunu_bul()
+
+    try:
+        return pdf_tablolarini_cikar(
+            pdf_yolu=pdf_yolu,
+            sayfa_no=sayfa_no
+        )
+
+    except FileNotFoundError as hata:
+        raise HTTPException(
+            status_code=404,
+            detail=str(hata)
+        )
+
+    except ValueError as hata:
+        raise HTTPException(
+            status_code=400,
+            detail=str(hata)
+        )
+
+    except Exception as hata:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Tablolar cikarilamadi: {hata}"
+        )

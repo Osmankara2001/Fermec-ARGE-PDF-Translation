@@ -160,6 +160,7 @@ def pdf_parca_kalite_kontrol(
         "sayfa_kontrolleri": kontroller,
     }
 
+
 def pdf_sayfa_ocr(
     pdf_yolu: Path,
     sayfa_no: int,
@@ -176,9 +177,11 @@ def pdf_sayfa_ocr(
             raise ValueError("Sayfa numarasi PDF sinirlarinin disinda.")
 
         sayfa = belge[sayfa_no - 1]
+        sayfa_genisligi = sayfa.rect.width
+        sayfa_yuksekligi = sayfa.rect.height
 
-        # OCR icin sayfayi gecici olarak yuksek cozunurlukte goruntuye cevir.
-        pix = sayfa.get_pixmap(dpi=300, alpha=False)
+        dpi = 300
+        pix = sayfa.get_pixmap(dpi=dpi, alpha=False)
 
         with tempfile.TemporaryDirectory() as gecici_klasor:
             png_yolu = Path(gecici_klasor) / "sayfa.png"
@@ -191,6 +194,7 @@ def pdf_sayfa_ocr(
                     "stdout",
                     "-l",
                     dil,
+                    "tsv",
                 ],
                 capture_output=True,
                 text=True,
@@ -202,7 +206,126 @@ def pdf_sayfa_ocr(
                     f"Tesseract OCR hatasi: {sonuc.stderr.strip()}"
                 )
 
-            ocr_metni = sonuc.stdout.strip()
+            satirlar = {}
+
+            for satir in sonuc.stdout.splitlines()[1:]:
+                alanlar = satir.split("\t", 11)
+
+                if len(alanlar) != 12:
+                    continue
+
+                (
+                    level, page_num, block_num, par_num,
+                    line_num, word_num, left, top,
+                    width, height, conf, text
+                ) = alanlar
+
+                text = text.strip()
+
+                if level != "5" or not text:
+                    continue
+
+                try:
+                    guven = float(conf)
+                except ValueError:
+                    continue
+
+                if guven < 0:
+                    continue
+
+                anahtar = (
+                    block_num,
+                    par_num,
+                    line_num,
+                )
+
+                satirlar.setdefault(anahtar, []).append({
+                    "metin": text,
+                    "bbox": [
+                        float(left),
+                        float(top),
+                        float(left) + float(width),
+                        float(top) + float(height),
+                    ],
+                })
+
+            bloklar = []
+
+            olcek_x = sayfa_genisligi / pix.width
+            olcek_y = sayfa_yuksekligi / pix.height
+
+            for kelimeler in satirlar.values():
+                x0 = min(k["bbox"][0] for k in kelimeler) * olcek_x
+                y0 = min(k["bbox"][1] for k in kelimeler) * olcek_y
+                x1 = max(k["bbox"][2] for k in kelimeler) * olcek_x
+                y1 = max(k["bbox"][3] for k in kelimeler) * olcek_y
+
+                bloklar.append({
+                    "id": f"P{sayfa_no:04d}_OCR{len(bloklar) + 1:04d}",
+                    "sayfa_no": sayfa_no,
+                    "tur": "metin",
+                    "bbox": [
+                        round(x0, 2),
+                        round(y0, 2),
+                        round(x1, 2),
+                        round(y1, 2),
+                    ],
+                    "metin": " ".join(
+                        k["metin"] for k in kelimeler
+                    ),
+                })
+                # OCR satirlarini paragraflar halinde birlestir.
+                paragraflar = []
+
+                for blok in bloklar:
+                    if paragraflar:
+                        onceki = paragraflar[-1]
+
+                        onceki_bbox = onceki["bbox"]
+                        mevcut_bbox = blok["bbox"]
+
+                        yatay_yakin = abs(
+                            onceki_bbox[0] - mevcut_bbox[0]
+                        ) < 25
+
+                        satir_yuksekligi = max(
+                            1,
+                            mevcut_bbox[3] - mevcut_bbox[1]
+                        )
+
+                        dikey_bosluk = (
+                            mevcut_bbox[1] - onceki_bbox[3]
+                        )
+
+                        dikey_yakin = (
+                            0 <= dikey_bosluk < satir_yuksekligi * 1.5
+                        )
+
+                        if yatay_yakin and dikey_yakin:
+                            onceki["metin"] += " " + blok["metin"]
+
+                            onceki["bbox"] = [
+                                min(onceki_bbox[0], mevcut_bbox[0]),
+                                min(onceki_bbox[1], mevcut_bbox[1]),
+                                max(onceki_bbox[2], mevcut_bbox[2]),
+                                max(onceki_bbox[3], mevcut_bbox[3]),
+                            ]
+
+                            continue
+
+                    paragraflar.append(blok.copy())
+
+                # Birlesmis paragraflara yeni ve benzersiz kimlik ver.
+                for indeks, paragraf in enumerate(paragraflar, start=1):
+                    paragraf["id"] = (
+                        f"P{sayfa_no:04d}_OCR{indeks:04d}"
+                    )
+
+                bloklar = paragraflar
+
+            ocr_metni = "\n".join(
+                blok["metin"] for blok in bloklar
+            )
 
     return {
         "dosya": pdf_yolu.name,
@@ -210,7 +333,10 @@ def pdf_sayfa_ocr(
         "ocr_dili": dil,
         "karakter_sayisi": len(ocr_metni),
         "metin": ocr_metni,
+        "blok_sayisi": len(bloklar),
+        "bloklar": bloklar,
     }
+
 
 def pdf_parca_metin_hazirla(
     pdf_yolu: Path,
@@ -297,6 +423,47 @@ def pdf_metin_bloklarini_al(
 
         bloklar = []
         tablo_ici_blok_sayisi = 0
+        # Sayfada okunabilir metin yoksa OCR kullan.
+        # Sayfadaki secilebilir metin miktarini hesapla.
+        secilebilir_metin = " ".join(
+            str(blok[4]).strip()
+            for blok in ham_bloklar
+            if len(blok) > 6 and blok[6] == 0
+        )
+
+        # Sayfada goruntu olup olmadigini kontrol et.
+        gorsel_var = bool(sayfa.get_images(full=True))
+
+        # Az miktarda secilebilir metin + goruntu varsa
+        # sayfanin asil icerigi taranmis olabilir.
+        ocr_gerekli = (
+            not secilebilir_metin
+            or (
+                gorsel_var
+                and len(secilebilir_metin) < 150
+            )
+        )
+
+        
+        if ocr_gerekli:
+            ocr_sonucu = pdf_sayfa_ocr(
+                pdf_yolu=pdf_yolu,
+                sayfa_no=sayfa_no,
+                dil="eng",
+            )
+
+            print(
+                f"Sayfa {sayfa_no}: OCR kullanildi. "
+                f"{ocr_sonucu['blok_sayisi']} metin satiri bulundu."
+            )
+
+            return {
+                "dosya": pdf_yolu.name,
+                "sayfa_no": sayfa_no,
+                "blok_sayisi": ocr_sonucu["blok_sayisi"],
+                "tablo_ici_blok_sayisi": 0,
+                "bloklar": ocr_sonucu["bloklar"],
+            }
 
         for blok in ham_bloklar:
             x0, y0, x1, y1, metin = blok[:5]

@@ -36,12 +36,28 @@ services:
     volumes:
       - ./reports/api_data:/app/data
     restart: unless-stopped
-
-
-
-
-
-
+  
+  pdf-isleyici:
+    build:
+      context: .
+      dockerfile: Dockerfile.pdf-isleyici
+    container_name: fermec-pdf-isleyici
+    ports:
+      - "8002:8002"
+    environment:
+      - PDF_API_URL=http://api:8000
+      - CEVIRI_URL=http://ceviri-servisi:8001
+      - INPUT_DIR=/input
+      - OUTPUT_DIR=/output
+      - TURKCE_FONT=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
+    volumes:
+      - ./input:/input:ro
+      - ./output:/output
+    depends_on:
+      - api
+      - ceviri-servisi
+    restart: unless-stopped
+  
 
 volumes:
   n8n_data:
