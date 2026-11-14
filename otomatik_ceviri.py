@@ -5,6 +5,10 @@ import requests
 import pymupdf
 import os
 import re
+import hashlib
+import tempfile
+import time
+from email.utils import parsedate_to_datetime
 from datetime import datetime, timezone
 from tablo_isleyici import sayfa_tablolarini_cevir
 from tablo_cizici import sayfa_tablolarini_ciz
@@ -17,11 +21,169 @@ OUTPUT = Path(os.getenv("OUTPUT_DIR", "output"))
 OUTPUT.mkdir(exist_ok=True)
 
 
-def api_get(url):
-    yanit = requests.get(url, timeout=120)
-    yanit.raise_for_status()
-    return yanit.json()
+# Toplam 4 istek: ilk deneme + en fazla 3 yeniden deneme.
+RETRY_BEKLEMELERI = (2, 4, 8)
+RETRY_HTTP_KODLARI = {408, 429, 500, 502, 503, 504}
 
+
+def retry_after_saniye(yanit):
+    """Sunucunun Retry-After talimatini oku; beklemeyi 60 saniye ile sinirla."""
+    deger = yanit.headers.get("Retry-After", "").strip()
+    if not deger:
+        return None
+    try:
+        saniye = float(deger)
+    except ValueError:
+        try:
+            tarih = parsedate_to_datetime(deger)
+            if tarih.tzinfo is None:
+                return None
+            saniye = (tarih - datetime.now(timezone.utc)).total_seconds()
+        except (TypeError, ValueError, OverflowError):
+            return None
+    return min(60.0, max(0.0, saniye))
+
+
+def http_istegi(method, url, **kwargs):
+    """Yalnizca gecici HTTP/ag hatalarinda sinirli yeniden deneme yap."""
+    for deneme in range(len(RETRY_BEKLEMELERI) + 1):
+        try:
+            yanit = requests.request(method, url, **kwargs)
+            if yanit.status_code not in RETRY_HTTP_KODLARI:
+                yanit.raise_for_status()
+                return yanit
+            # Gecici hata: deneme hakki bittiyse asil HTTP hatasini bildir.
+            if deneme == len(RETRY_BEKLEMELERI):
+                yanit.raise_for_status()
+            bekleme = retry_after_saniye(yanit)
+            if bekleme is None:
+                bekleme = RETRY_BEKLEMELERI[deneme]
+            print(
+                f"RETRY: {method} {url} HTTP {yanit.status_code}; "
+                f"{bekleme:g} saniye sonra yeniden denenecek "
+                f"({deneme + 1}/{len(RETRY_BEKLEMELERI)}).",
+                flush=True,
+            )
+            yanit.close()
+            time.sleep(bekleme)
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as hata:
+            if deneme == len(RETRY_BEKLEMELERI):
+                raise
+            bekleme = RETRY_BEKLEMELERI[deneme]
+            print(
+                f"RETRY: {method} {url} {type(hata).__name__}; "
+                f"{bekleme:g} saniye sonra yeniden denenecek "
+                f"({deneme + 1}/{len(RETRY_BEKLEMELERI)}).",
+                flush=True,
+            )
+            time.sleep(bekleme)
+    raise RuntimeError("Retry deneme siniri asildi")
+
+
+def api_get(url):
+    return http_istegi("GET", url, timeout=120).json()
+
+
+
+
+# Checkpoint bicimi degisirse surumu artir. Resume asamasinda dogrulanacak.
+CHECKPOINT_SURUMU = 1
+CEVIRI_PIPELINE_SURUMU = "fer mec-2026-11-checkpoint-v1".replace(" ", "")
+
+
+def dosya_sha256(yol):
+    ozet = hashlib.sha256()
+    with open(yol, "rb") as kaynak:
+        for parca in iter(lambda: kaynak.read(1024 * 1024), b""):
+            ozet.update(parca)
+    return ozet.hexdigest()
+
+
+def sayfa_checkpoint_kaydet(dosya_adi, kaynak_sha256, toplam_sayfa,
+                           sayfa_no, ceviriler, tablolar, kullanim, duzeltmeler):
+    """Tamamlanan sayfayi ayni klasorde gecici dosya + atomik rename ile kaydeder."""
+    hedef_klasor = OUTPUT / "checkpoints" / Path(dosya_adi).stem
+    hedef_klasor.mkdir(parents=True, exist_ok=True)
+    hedef = hedef_klasor / f"page_{sayfa_no:04d}.json"
+    kayit = {
+        "checkpoint_surumu": CHECKPOINT_SURUMU,
+        "pipeline_surumu": CEVIRI_PIPELINE_SURUMU,
+        "kaynak_pdf": dosya_adi,
+        "kaynak_sha256": kaynak_sha256,
+        "toplam_sayfa": toplam_sayfa,
+        "sayfa": sayfa_no,
+        "durum": "tamamlandi",
+        "kayit_zamani_utc": datetime.now(timezone.utc).isoformat(),
+        "ceviri_bloklari": ceviriler,
+        "tablolar": tablolar,
+        "api_kullanim": kullanim,
+        "duzeltme_gecmisi": duzeltmeler,
+    }
+    gecici = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=hedef_klasor,
+            prefix=f".{hedef.stem}_", suffix=".tmp", delete=False
+        ) as dosya:
+            gecici = Path(dosya.name)
+            json.dump(kayit, dosya, ensure_ascii=False, indent=2)
+            dosya.flush()
+            os.fsync(dosya.fileno())
+        os.replace(gecici, hedef)
+    finally:
+        if gecici is not None and gecici.exists():
+            gecici.unlink()
+    print(f"CHECKPOINT kaydedildi: {hedef}", flush=True)
+
+
+def sayfa_checkpoint_yukle(dosya_adi, kaynak_sha256, toplam_sayfa, sayfa_no):
+    """Yalnizca tam ve kaynak PDF ile eslesen checkpoint'i kullan."""
+    hedef = OUTPUT / "checkpoints" / Path(dosya_adi).stem / f"page_{sayfa_no:04d}.json"
+    if not hedef.is_file():
+        return None
+    try:
+        with hedef.open("r", encoding="utf-8") as dosya:
+            kayit = json.load(dosya)
+        beklenen = {
+            "checkpoint_surumu": CHECKPOINT_SURUMU,
+            "pipeline_surumu": CEVIRI_PIPELINE_SURUMU,
+            "kaynak_pdf": dosya_adi,
+            "kaynak_sha256": kaynak_sha256,
+            "toplam_sayfa": toplam_sayfa,
+            "sayfa": sayfa_no,
+            "durum": "tamamlandi",
+        }
+        if not isinstance(kayit, dict) or any(kayit.get(k) != v for k, v in beklenen.items()):
+            raise ValueError("PDF kimligi, surum veya sayfa bilgisi uyusmuyor")
+        ceviriler = kayit.get("ceviri_bloklari")
+        tablolar = kayit.get("tablolar")
+        duzeltmeler = kayit.get("duzeltme_gecmisi")
+        kullanim = kayit.get("api_kullanim")
+        if not isinstance(ceviriler, list) or not isinstance(tablolar, list) or not isinstance(duzeltmeler, list):
+            raise ValueError("Ceviri, tablo veya duzeltme alani gecersiz")
+        if kullanim is not None and not isinstance(kullanim, dict):
+            raise ValueError("API kullanim alani gecersiz")
+        idler = []
+        for blok in ceviriler:
+            if not isinstance(blok, dict) or not isinstance(blok.get("id"), str) or not blok["id"]:
+                raise ValueError("Blok kimligi gecersiz")
+            if not isinstance(blok.get("kaynak_metin"), str) or not isinstance(blok.get("ceviri"), str) or not blok["ceviri"].strip():
+                raise ValueError("Blok metni gecersiz")
+            bboxlar = blok.get("kaynak_bboxlar")
+            if not isinstance(bboxlar, list) or not bboxlar or any(
+                not isinstance(b, (list, tuple)) or len(b) != 4 or
+                any(not isinstance(x, (int, float)) for x in b) for b in bboxlar
+            ):
+                raise ValueError("Blok konumu gecersiz")
+            idler.append(blok["id"])
+        if len(idler) != len(set(idler)):
+            raise ValueError("Tekrarlanan blok kimligi")
+        if ceviriler and not kullanim:
+            raise ValueError("API kullanim bilgisi eksik")
+        return kayit
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as hata:
+        print(f"UYARI: Sayfa {sayfa_no} checkpoint kullanilamadi: {hata}", flush=True)
+        return None
 
 
 def izlenebilirlik_raporu_yaz(dosya_adi, toplam_sayfa, tum_ceviriler, tum_tablolar, sayfa_kullanim, sayfa_duzeltmeler):
@@ -434,6 +596,10 @@ def main():
 
     print(f"PDF: {dosya_adi}")
     print(f"Toplam sayfa: {toplam_sayfa}")
+    pdf_yolu = Path(os.getenv("INPUT_DIR", "input")) / dosya_adi
+    if not pdf_yolu.is_file():
+        raise FileNotFoundError(f"Checkpoint icin kaynak PDF bulunamadi: {pdf_yolu}")
+    kaynak_sha256 = dosya_sha256(pdf_yolu)
 
     tum_ceviriler = {}
     tum_tablolar = {}
@@ -463,6 +629,21 @@ def main():
             print(f"\nSayfa {sayfa_no}/{toplam_sayfa}")
 
             try:
+                kayit = sayfa_checkpoint_yukle(
+                    dosya_adi, kaynak_sha256, toplam_sayfa, sayfa_no
+                )
+                if kayit is not None:
+                    anahtar = str(sayfa_no)
+                    tum_ceviriler[anahtar] = kayit["ceviri_bloklari"]
+                    tum_tablolar[anahtar] = kayit["tablolar"]
+                    sayfa_kullanim[anahtar] = kayit["api_kullanim"]
+                    sayfa_duzeltmeler[anahtar] = kayit["duzeltme_gecmisi"]
+                    print(
+                        f"RESUME: Sayfa {sayfa_no} checkpoint'ten yuklendi; "
+                        "ceviri ve tablo API islemleri atlandi.", flush=True
+                    )
+                    continue
+
                 veri = api_get(
                     f"{API}/pdf/page/{sayfa_no}/translation-ready"
                 )
@@ -483,16 +664,22 @@ def main():
                         "Cevirilecek metin bulunamadi."
                     )
                     tum_ceviriler[str(sayfa_no)] = []
+                    # Bos metinli sayfada da tablo islemini calistir.
+                    tablo_sonucu = sayfa_tablolarini_cevir(sayfa_no)
+                    tum_tablolar[str(sayfa_no)] = tablo_sonucu["tablolar"]
+                    sayfa_checkpoint_kaydet(
+                        dosya_adi, kaynak_sha256, toplam_sayfa, sayfa_no,
+                        [], tum_tablolar[str(sayfa_no)], None, []
+                    )
                     continue
 
                 # OpenAI ceviri servisine gonder.
-                yanit = requests.post(
+                yanit = http_istegi(
+                    "POST",
                     f"{CEVIRI}/translate",
                     json={"bloklar": bloklar},
                     timeout=300
                 )
-
-                yanit.raise_for_status()
 
                 sonuc = yanit.json()
                 sayfa_kullanim[str(sayfa_no)] = sonuc.get("kullanim")
@@ -568,6 +755,15 @@ def main():
                          f"{tablo_hatasi}"
                     ) from tablo_hatasi
 
+                # Ceviri + tablo basariliysa sonraki sayfaya gecmeden kaydet.
+                sayfa_checkpoint_kaydet(
+                    dosya_adi, kaynak_sha256, toplam_sayfa, sayfa_no,
+                    tum_ceviriler[str(sayfa_no)],
+                    tum_tablolar[str(sayfa_no)],
+                    sayfa_kullanim.get(str(sayfa_no)),
+                    sayfa_duzeltmeler.get(str(sayfa_no), []),
+                )
+
             except Exception as hata:
                 print(
                     f"HATA: Sayfa {sayfa_no} islenirken "
@@ -641,8 +837,6 @@ def main():
     print(f"\nCeviriler kaydedildi: {cikti}")
 
     # Tum sayfalari tek bir cift dilli PDF'e donustur.
-    pdf_yolu = Path(os.getenv("INPUT_DIR", "input")) / dosya_adi
-
     cift_dilli_pdf_uret(
         pdf_yolu,
         tum_ceviriler,
