@@ -45,6 +45,10 @@ services:
     ports:
       - "8002:8002"
     environment:
+      - OPENAI_PRICING_MODEL=gpt-6-luna
+      - OPENAI_INPUT_USD_PER_MILLION=0.10
+      - OPENAI_CACHED_INPUT_USD_PER_MILLION=0.01
+      - OPENAI_OUTPUT_USD_PER_MILLION=0.50
       - PDF_API_URL=http://api:8000
       - CEVIRI_URL=http://ceviri-servisi:8001
       - INPUT_DIR=/input

@@ -38,6 +38,7 @@ def translate(istek: CeviriIstegi):
         "duzeltme_turu": 0,
         "insan_kontrolu_gerekli": False,
         "kullanim": {},
+        "duzeltme_gecmisi": [],
         "durum": "basladi",
     }
 

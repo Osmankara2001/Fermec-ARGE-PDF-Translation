@@ -35,6 +35,7 @@ class CeviriState(TypedDict):
     insan_kontrolu_gerekli: bool
     durum: str
     kullanim: dict
+    duzeltme_gecmisi: list[dict]
 
 
 def budget_gate(state: CeviriState):
@@ -71,6 +72,7 @@ def translate(state: CeviriState):
 
     toplam_giris_token = 0
     toplam_cikis_token = 0
+    toplam_cached_token = 0
 
     for deneme in range(1, 4):
         response = client.responses.create(
@@ -117,6 +119,8 @@ def translate(state: CeviriState):
         if response.usage:
             toplam_giris_token += response.usage.input_tokens
             toplam_cikis_token += response.usage.output_tokens
+            detay = getattr(response.usage, "input_tokens_details", None)
+            toplam_cached_token += getattr(detay, "cached_tokens", 0) or 0
 
         try:
             if not response.output_text.strip():
@@ -193,6 +197,12 @@ def translate(state: CeviriState):
         "model": response.model,
         "giris_token": toplam_giris_token,
         "cikis_token": toplam_cikis_token,
+        "cached_giris_token": toplam_cached_token,
+        "ilk_ceviri": {
+            "giris_token": toplam_giris_token,
+            "cikis_token": toplam_cikis_token,
+            "cached_giris_token": toplam_cached_token,
+        },
         "sure_saniye": gecen_sure,
     }
 
@@ -222,6 +232,7 @@ def rule_validation(state: CeviriState):
     # Yalnizca sayi kontrolu basarisiz olan bloklari tekrar cevir.
     # Basarili bloklara dokunma; eksik veya fazla sayiyi kabul etme.
     kullanim = dict(state.get("kullanim") or {})
+    duzeltme_gecmisi = list(state.get("duzeltme_gecmisi") or [])
     for blok in ceviri_bloklari:
         kaynak_sayilar = sayilari_al(blok["kaynak_metin"])
         ceviri_sayilar = sayilari_al(blok["ceviri"])
@@ -235,6 +246,17 @@ def rule_validation(state: CeviriState):
             flush=True,
         )
         for deneme in range(1, 3):
+            kayit = {
+                "blok_id": blok["id"],
+                "hata_turu": "sayi_uyusmazligi",
+                "deneme": deneme,
+                "kaynak_sayilar": dict(kaynak_sayilar),
+                "onceki_ceviri_sayilar": dict(sayilari_al(blok["ceviri"])),
+                "sonuc": "basarisiz",
+                "ek_giris_token": 0,
+                "ek_cikis_token": 0,
+                "ek_cached_giris_token": 0,
+            }
             baslangic = time.perf_counter()
             response = client.responses.create(
                 model="gpt-6-luna",
@@ -270,9 +292,16 @@ def rule_validation(state: CeviriState):
                 max_output_tokens=3000,
             )
             gecen_sure = round(time.perf_counter() - baslangic, 3)
+            kayit["sure_saniye"] = gecen_sure
             if response.usage:
                 ek_giris = response.usage.input_tokens
                 ek_cikis = response.usage.output_tokens
+                detay = getattr(response.usage, "input_tokens_details", None)
+                ek_cached = getattr(detay, "cached_tokens", 0) or 0
+                kayit["ek_cached_giris_token"] = ek_cached
+                kullanim["cached_giris_token"] = kullanim.get("cached_giris_token", 0) + ek_cached
+                kayit["ek_giris_token"] = ek_giris
+                kayit["ek_cikis_token"] = ek_cikis
                 kullanim["giris_token"] = kullanim.get("giris_token", 0) + ek_giris
                 kullanim["cikis_token"] = kullanim.get("cikis_token", 0) + ek_cikis
                 kullanim["sure_saniye"] = round(
@@ -292,6 +321,8 @@ def rule_validation(state: CeviriState):
                 if sayilari_al(duzeltilmis) != kaynak_sayilar:
                     raise ValueError("Sayilar hala eslesmiyor")
             except (ValueError, KeyError, TypeError) as hata:
+                kayit["hata"] = str(hata)
+                duzeltme_gecmisi.append(kayit)
                 print(
                     f"Blok {blok['id']}, sayi duzeltme "
                     f"{deneme}/2 basarisiz: {hata}",
@@ -299,6 +330,8 @@ def rule_validation(state: CeviriState):
                 )
                 continue
 
+            kayit["sonuc"] = "basarili"
+            duzeltme_gecmisi.append(kayit)
             blok["ceviri"] = duzeltilmis
             print(f"Blok {blok['id']} sayi kontrolu duzeltildi.", flush=True)
             break
@@ -312,6 +345,7 @@ def rule_validation(state: CeviriState):
         "ceviri_bloklari": ceviri_bloklari,
         "kullanim": kullanim,
         "durum": "kurallar_kontrol_edildi",
+        "duzeltme_gecmisi": duzeltme_gecmisi,
     }
 
 

@@ -5,6 +5,7 @@ import requests
 import pymupdf
 import os
 import re
+from datetime import datetime, timezone
 from tablo_isleyici import sayfa_tablolarini_cevir
 from tablo_cizici import sayfa_tablolarini_ciz
 from gorsel_yerlestirici import sayfa_gorsellerini_yerlestir
@@ -21,6 +22,149 @@ def api_get(url):
     yanit.raise_for_status()
     return yanit.json()
 
+
+
+def izlenebilirlik_raporu_yaz(dosya_adi, toplam_sayfa, tum_ceviriler, tum_tablolar, sayfa_kullanim, sayfa_duzeltmeler):
+    """Basariyla uretilen PDF icin kaynak-ceviri esleme kaydi olusturur."""
+    sayfalar = []
+    for sayfa_no in range(1, toplam_sayfa + 1):
+        bloklar = tum_ceviriler.get(str(sayfa_no), [])
+        kayitlar = []
+        for blok in bloklar:
+            blok_id = blok["id"]
+            kayitlar.append({
+                "blok_id": blok_id,
+                "okuma_yontemi": "ocr" if "_OCR" in blok_id else "metin",
+                "kaynak_metin": blok.get("kaynak_metin", ""),
+                "turkce_ceviri": blok["ceviri"],
+                "kaynak_bboxlar": blok.get("kaynak_bboxlar", []),
+                "blok_kontrolu": "kimlik_ve_bos_metin_kontrolu_gecti",
+            })
+        sayfalar.append({
+            "sayfa": sayfa_no,
+            "blok_sayisi": len(kayitlar),
+            "tablo_sayisi": len(tum_tablolar.get(str(sayfa_no), [])),
+            "api_kullanim": sayfa_kullanim.get(str(sayfa_no)),
+            "duzeltme_gecmisi": sayfa_duzeltmeler.get(str(sayfa_no), []),
+            "bloklar": kayitlar,
+        })
+
+    rapor = {
+        "kaynak_pdf": dosya_adi,
+        "cikti_pdf": f"{Path(dosya_adi).stem}_TR_EN.pdf",
+        "olusturulma_zamani_utc": datetime.now(timezone.utc).isoformat(),
+        "durum": "pdf_olusturuldu",
+        "toplam_sayfa": toplam_sayfa,
+        "toplam_ceviri_blogu": sum(s["blok_sayisi"] for s in sayfalar),
+        "aciklama": (
+            "Blok kontrolu, PDF isleyicinin kimlik ve bos ceviri kontrollerini "
+            "gosterir. OCR dogrulugu ve anlamsal ceviri kalitesi onaylandi anlamina gelmez. "
+            "Duzeltme gecmisi sadece ceviri servisinin raporladigi denemeleri kapsar."
+        ),
+        "sayfalar": sayfalar,
+    }
+    hedef = OUTPUT / f"{Path(dosya_adi).stem}_izlenebilirlik.json"
+    with hedef.open("w", encoding="utf-8") as dosya:
+        json.dump(rapor, dosya, ensure_ascii=False, indent=2)
+    print(f"Izlenebilirlik raporu kaydedildi: {hedef}", flush=True)
+
+
+def maliyet_raporu_yaz(dosya_adi, toplam_sayfa, sayfa_kullanim, sayfa_duzeltmeler):
+    """API usage'dan tahmini maliyet. Fiyatlar ortam degiskenlerinden okunur."""
+    from decimal import Decimal
+
+    def fiyat(anahtar):
+        deger = os.getenv(anahtar)
+        if deger is None or not deger.strip():
+            return None
+        return Decimal(deger)
+
+    giris_fiyat = fiyat("OPENAI_INPUT_USD_PER_MILLION")
+    cached_fiyat = fiyat("OPENAI_CACHED_INPUT_USD_PER_MILLION")
+    cikis_fiyat = fiyat("OPENAI_OUTPUT_USD_PER_MILLION")
+    fiyat_modeli = os.getenv("OPENAI_PRICING_MODEL", "").strip()
+    fiyatlar_hazir = all(x is not None for x in (giris_fiyat, cached_fiyat, cikis_fiyat)) and bool(fiyat_modeli)
+
+    def hesapla(giris, cikis, cached):
+        if not fiyatlar_hazir:
+            return None
+        normal = max(0, giris - cached)
+        tutar = (Decimal(normal) * giris_fiyat + Decimal(cached) * cached_fiyat + Decimal(cikis) * cikis_fiyat) / Decimal(1000000)
+        return float(tutar)
+
+    sayfalar = []
+    toplam_giris = toplam_cikis = toplam_cached = 0
+    toplam_ilk = toplam_duzeltme = Decimal(0)
+    maliyet_hesaplanabilir = fiyatlar_hazir
+    modeller = set()
+    for no in range(1, toplam_sayfa + 1):
+        kullanim = sayfa_kullanim.get(str(no)) or {}
+        duzeltmeler = sayfa_duzeltmeler.get(str(no)) or []
+        model = kullanim.get("model")
+        if model:
+            modeller.add(model)
+        giris = int(kullanim.get("giris_token") or 0)
+        cikis = int(kullanim.get("cikis_token") or 0)
+        cached = int(kullanim.get("cached_giris_token") or 0)
+        duz_giris = sum(int(d.get("ek_giris_token") or 0) for d in duzeltmeler)
+        duz_cikis = sum(int(d.get("ek_cikis_token") or 0) for d in duzeltmeler)
+        duz_cached = sum(int(d.get("ek_cached_giris_token") or 0) for d in duzeltmeler)
+        ilk = kullanim.get("ilk_ceviri")
+        if ilk:
+            ilk_giris = int(ilk.get("giris_token") or 0)
+            ilk_cikis = int(ilk.get("cikis_token") or 0)
+            ilk_cached = int(ilk.get("cached_giris_token") or 0)
+        else:
+            ilk_giris = giris - duz_giris
+            ilk_cikis = cikis - duz_cikis
+            ilk_cached = cached - duz_cached
+        tutar_ilk = hesapla(ilk_giris, ilk_cikis, ilk_cached)
+        tutar_duz = hesapla(duz_giris, duz_cikis, duz_cached)
+        if model != fiyat_modeli or not kullanim or min(ilk_giris, ilk_cikis, ilk_cached) < 0 or cached > giris or ilk_cached > ilk_giris or duz_cached > duz_giris:
+            tutar_ilk = tutar_duz = None
+            maliyet_hesaplanabilir = False
+        if tutar_ilk is not None:
+            toplam_ilk += Decimal(str(tutar_ilk))
+            toplam_duzeltme += Decimal(str(tutar_duz))
+        toplam_giris += giris
+        toplam_cikis += cikis
+        toplam_cached += cached
+        sayfalar.append({
+            "sayfa": no, "model": model,
+            "giris_token": giris, "cached_giris_token": cached,
+            "cikis_token": cikis,
+            "ilk_ceviri_maliyeti_usd": tutar_ilk,
+            "duzeltme_maliyeti_usd": tutar_duz,
+            "toplam_maliyet_usd": round(tutar_ilk + tutar_duz, 10) if tutar_ilk is not None else None,
+            "duzeltme_deneme_sayisi": len(duzeltmeler),
+        })
+
+    rapor = {
+        "kaynak_pdf": dosya_adi,
+        "olusturulma_zamani_utc": datetime.now(timezone.utc).isoformat(),
+        "para_birimi": "USD",
+        "hesaplama_turu": "API token kullanimina dayali tahmin; fatura degildir",
+        "fiyatlandirma_modeli": fiyat_modeli or None,
+        "bir_milyon_token_fiyatlari_usd": {
+            "giris": float(giris_fiyat) if giris_fiyat is not None else None,
+            "cached_giris": float(cached_fiyat) if cached_fiyat is not None else None,
+            "cikis": float(cikis_fiyat) if cikis_fiyat is not None else None,
+        },
+        "durum": "hesaplandi" if maliyet_hesaplanabilir else "fiyat_veya_kullanim_dogrulanmali",
+        "toplam_giris_token": toplam_giris,
+        "toplam_cached_giris_token": toplam_cached,
+        "toplam_cikis_token": toplam_cikis,
+        "ilk_ceviri_maliyeti_usd": round(float(toplam_ilk), 10) if maliyet_hesaplanabilir else None,
+        "duzeltme_maliyeti_usd": round(float(toplam_duzeltme), 10) if maliyet_hesaplanabilir else None,
+        "toplam_maliyet_usd": round(float(toplam_ilk + toplam_duzeltme), 10) if maliyet_hesaplanabilir else None,
+        "sayfa_basi_ortalama_usd": round(float((toplam_ilk + toplam_duzeltme) / Decimal(toplam_sayfa)), 10) if maliyet_hesaplanabilir and toplam_sayfa else None,
+        "uyari": "Fiyatlar OPENAI_* ortam degiskenleriyle verilmeli; model eslesmeli. Tablo servisinin ayri API maliyetleri dahil olmayabilir. API hatalarinda tamamlanmayan cagri maliyetleri raporlanmaz.",
+        "sayfalar": sayfalar,
+    }
+    hedef = OUTPUT / f"{Path(dosya_adi).stem}_maliyet_raporu.json"
+    with hedef.open("w", encoding="utf-8") as dosya:
+        json.dump(rapor, dosya, ensure_ascii=False, indent=2)
+    print(f"Maliyet raporu kaydedildi: {hedef}", flush=True)
 
 
 def cift_dilli_pdf_uret(pdf_yolu, tum_ceviriler,tum_tablolar):
@@ -293,6 +437,8 @@ def main():
 
     tum_ceviriler = {}
     tum_tablolar = {}
+    sayfa_kullanim = {}
+    sayfa_duzeltmeler = {}
 
     # Her pencere en fazla 5 sayfa icerir.
     PENCERE_BOYUTU = 5
@@ -349,6 +495,8 @@ def main():
                 yanit.raise_for_status()
 
                 sonuc = yanit.json()
+                sayfa_kullanim[str(sayfa_no)] = sonuc.get("kullanim")
+                sayfa_duzeltmeler[str(sayfa_no)] = sonuc.get("duzeltme_gecmisi", [])
 
                 ceviriler = sonuc.get(
                     "ceviri_bloklari", []
@@ -499,6 +647,17 @@ def main():
         pdf_yolu,
         tum_ceviriler,
         tum_tablolar
+    )
+
+    maliyet_raporu_yaz(dosya_adi, toplam_sayfa, sayfa_kullanim, sayfa_duzeltmeler)
+
+    izlenebilirlik_raporu_yaz(
+        dosya_adi,
+        toplam_sayfa,
+        tum_ceviriler,
+        tum_tablolar,
+        sayfa_kullanim,
+        sayfa_duzeltmeler,
     )
 
 
