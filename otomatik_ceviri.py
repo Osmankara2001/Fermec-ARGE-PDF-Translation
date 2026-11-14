@@ -186,6 +186,50 @@ def sayfa_checkpoint_yukle(dosya_adi, kaynak_sha256, toplam_sayfa, sayfa_no):
         return None
 
 
+def kurtarma_icin_kaynak_bloklari(pdf_yolu, sayfa_no):
+    """API bos donerse kaynak PDF'den konumlu metin bloklarini al.
+
+    Secilebilir metin yoksa OCR endpoint'i sonraki asamada denenir.
+    """
+    sonuc = []
+    with pymupdf.open(pdf_yolu) as belge:
+        sayfa = belge[sayfa_no - 1]
+        for sira, blok in enumerate(sayfa.get_text("blocks", sort=True), start=1):
+            if len(blok) < 7 or blok[6] != 0:
+                continue
+            metin = str(blok[4]).strip()
+            if not metin:
+                continue
+            bbox = [float(v) for v in blok[:4]]
+            sonuc.append({
+                "id": f"P{sayfa_no:04d}_FALLBACK_{sira:04d}",
+                "metin": metin,
+                "kaynak_bboxlar": [bbox],
+            })
+    return sonuc
+
+
+def kurtarma_icin_ocr_bloklari(sayfa_no, pdf_yolu):
+    """Secilebilir metin yoksa mevcut PDF API OCR endpoint'ini kullan."""
+    try:
+        yanit = api_get(f"{API}/pdf/ocr/{sayfa_no}")
+        metin = str(yanit.get("metin") or "").strip()
+        if not metin:
+            return []
+        with pymupdf.open(pdf_yolu) as belge:
+            alan = belge[sayfa_no - 1].rect
+            bbox = [float(alan.x0 + 12), float(alan.y0 + 12),
+                    float(alan.x1 - 12), float(alan.y1 - 12)]
+        return [{
+            "id": f"P{sayfa_no:04d}_OCR_FALLBACK_0001",
+            "metin": metin,
+            "kaynak_bboxlar": [bbox],
+        }]
+    except Exception as hata:
+        print(f"UYARI: Sayfa {sayfa_no}: OCR kurtarma basarisiz: {hata}", flush=True)
+        return []
+
+
 def izlenebilirlik_raporu_yaz(dosya_adi, toplam_sayfa, tum_ceviriler, tum_tablolar, sayfa_kullanim, sayfa_duzeltmeler):
     """Basariyla uretilen PDF icin kaynak-ceviri esleme kaydi olusturur."""
     sayfalar = []
@@ -327,6 +371,71 @@ def maliyet_raporu_yaz(dosya_adi, toplam_sayfa, sayfa_kullanim, sayfa_duzeltmele
     with hedef.open("w", encoding="utf-8") as dosya:
         json.dump(rapor, dosya, ensure_ascii=False, indent=2)
     print(f"Maliyet raporu kaydedildi: {hedef}", flush=True)
+
+
+def eksik_ceviri_kontrol_raporu_yaz(pdf_yolu, tum_ceviriler, tum_tablolar):
+    """Kaynak ve uretilen PDF'yi sayfa sayfa karsilastirir; PDF'yi durdurmaz.
+
+    Bu kontrol OCR kalitesini veya ceviri anlamini degerlendirmez.
+    Taranmis sayfalarda kaynak metin secilemiyorsa kesin eksik demek yerine
+    manuel inceleme onerir.
+    """
+    cikti_yolu = OUTPUT / f"{Path(pdf_yolu).stem}_TR_EN.pdf"
+    sayfalar = []
+    with pymupdf.open(pdf_yolu) as kaynak, pymupdf.open(cikti_yolu) as cikti:
+        if len(kaynak) != len(cikti):
+            raise RuntimeError("Kalite kontrolu: kaynak ve cikti sayfa sayisi uyusmuyor")
+        for indeks, orijinal in enumerate(kaynak):
+            no = indeks + 1
+            hedef = cikti[indeks]
+            genislik = orijinal.rect.width
+            # Yalnizca sol Turkce bolumun secilebilir metnini olc.
+            sol_metin = hedef.get_text(clip=pymupdf.Rect(0, 0, genislik, hedef.rect.height)).strip()
+            kaynak_metin = orijinal.get_text().strip()
+            bloklar = tum_ceviriler.get(str(no), [])
+            tablolar = tum_tablolar.get(str(no), [])
+            ceviri_blok_sayisi = sum(bool(b.get("ceviri", "").strip()) for b in bloklar)
+            tablo_hucre_sayisi = sum(
+                bool(str(h.get("ceviri") or h.get("metin") or "").strip())
+                for t in tablolar for satir in t.get("satirlar", [])
+                for h in satir.get("hucreler", [])
+            )
+            sorunlar = []
+            if kaynak_metin and ceviri_blok_sayisi == 0 and tablo_hucre_sayisi == 0:
+                sorunlar.append("Kaynakta secilebilir metin var ancak Turkce ceviri blogu veya tablo metni yok")
+            if (ceviri_blok_sayisi or tablo_hucre_sayisi) and not sol_metin:
+                sorunlar.append("Ceviri verisi var ancak cikti PDF'nin solunda secilebilir metin bulunamadi")
+            if not kaynak_metin and not sol_metin and not (ceviri_blok_sayisi or tablo_hucre_sayisi):
+                # Tamamen gorsel/bos sayfayi otomatik olarak 'eksik' ilan etme.
+                durum = "manuel_inceleme"
+                sorunlar.append("Kaynak ve Turkce tarafta secilebilir metin yok; gorsel/bos sayfa olabilir")
+            else:
+                durum = "uyari" if sorunlar else "kontrol_gecti"
+            sayfalar.append({
+                "sayfa": no, "durum": durum,
+                "kaynak_secilebilir_karakter": len(kaynak_metin),
+                "ceviri_blok_sayisi": ceviri_blok_sayisi,
+                "tablo_metin_hucre_sayisi": tablo_hucre_sayisi,
+                "turkce_secilebilir_karakter": len(sol_metin),
+                "sorunlar": sorunlar,
+            })
+    rapor = {
+        "kaynak_pdf": Path(pdf_yolu).name,
+        "cikti_pdf": cikti_yolu.name,
+        "olusturulma_zamani_utc": datetime.now(timezone.utc).isoformat(),
+        "toplam_sayfa": len(sayfalar),
+        "uyarili_sayfalar": [s["sayfa"] for s in sayfalar if s["durum"] == "uyari"],
+        "manuel_inceleme_sayfalari": [s["sayfa"] for s in sayfalar if s["durum"] == "manuel_inceleme"],
+        "aciklama": "Yalnizca eksik metin/yerlestirme taramasi. OCR ve ceviri anlami kontrol edilmez; metin varligi tamlik garantisi degildir.",
+        "sayfalar": sayfalar,
+    }
+    hedef = OUTPUT / f"{Path(pdf_yolu).stem}_eksik_ceviri_kontrol.json"
+    with hedef.open("w", encoding="utf-8") as dosya:
+        json.dump(rapor, dosya, ensure_ascii=False, indent=2)
+    print(f"Eksik ceviri kontrol raporu: {hedef}", flush=True)
+    print(f"UYARILI SAYFALAR: {rapor['uyarili_sayfalar']}", flush=True)
+    print(f"MANUEL INCELEME: {rapor['manuel_inceleme_sayfalari']}", flush=True)
+    return rapor
 
 
 def cift_dilli_pdf_uret(pdf_yolu, tum_ceviriler,tum_tablolar):
@@ -632,6 +741,13 @@ def main():
                 kayit = sayfa_checkpoint_yukle(
                     dosya_adi, kaynak_sha256, toplam_sayfa, sayfa_no
                 )
+                if kayit is not None and not kayit["ceviri_bloklari"] and not kayit["tablolar"]:
+                    # Bos checkpoint'i kaynakta metin varsa basarili sayma.
+                    with pymupdf.open(pdf_yolu) as belge:
+                        kaynakta_metin_var = bool(belge[sayfa_no - 1].get_text().strip())
+                    if kaynakta_metin_var:
+                        print(f"KURTARMA: Sayfa {sayfa_no} bos checkpoint; kaynakta metin var.", flush=True)
+                        kayit = None
                 if kayit is not None:
                     anahtar = str(sayfa_no)
                     tum_ceviriler[anahtar] = kayit["ceviri_bloklari"]
@@ -648,29 +764,30 @@ def main():
                     f"{API}/pdf/page/{sayfa_no}/translation-ready"
                 )
 
-                bloklar = [
+                kaynak_bloklari = [
                     {
                         "id": blok["id"],
-                        "metin": blok["metin"]
+                        "metin": blok["metin"],
+                        "kaynak_bboxlar": blok.get("kaynak_bboxlar", []),
                     }
                     for blok in veri["cevrilecek_bloklar"]
+                    if str(blok.get("metin") or "").strip()
                 ]
-
-                # OCR dahil tum metinler artik API tarafinda
-                # koordinatlariyla birlikte hazirlaniyor.
+                if not kaynak_bloklari:
+                    kaynak_bloklari = kurtarma_icin_kaynak_bloklari(pdf_yolu, sayfa_no)
+                    if kaynak_bloklari:
+                        print(f"KURTARMA: Sayfa {sayfa_no}: secilebilir metin bloklari kullanildi.", flush=True)
+                if not kaynak_bloklari:
+                    kaynak_bloklari = kurtarma_icin_ocr_bloklari(sayfa_no, pdf_yolu)
+                    if kaynak_bloklari:
+                        print(f"KURTARMA: Sayfa {sayfa_no}: OCR metni kullanildi.", flush=True)
+                bloklar = [{"id": b["id"], "metin": b["metin"]} for b in kaynak_bloklari]
                 if not bloklar:
-                    print(
-                        f"Sayfa {sayfa_no}: "
-                        "Cevirilecek metin bulunamadi."
-                    )
+                    print(f"UYARI: Sayfa {sayfa_no}: kurtarma sonrasi da metin bulunamadi.", flush=True)
                     tum_ceviriler[str(sayfa_no)] = []
-                    # Bos metinli sayfada da tablo islemini calistir.
                     tablo_sonucu = sayfa_tablolarini_cevir(sayfa_no)
                     tum_tablolar[str(sayfa_no)] = tablo_sonucu["tablolar"]
-                    sayfa_checkpoint_kaydet(
-                        dosya_adi, kaynak_sha256, toplam_sayfa, sayfa_no,
-                        [], tum_tablolar[str(sayfa_no)], None, []
-                    )
+                    # Bos checkpoint kalici basari olarak kaydedilmez.
                     continue
 
                 # OpenAI ceviri servisine gonder.
@@ -714,12 +831,8 @@ def main():
 
 
                 # Kaynak PDF'deki konum bilgilerini eslestir.
-                konumlar = {
-                    blok["id"]: blok.get(
-                        "kaynak_bboxlar", []
-                    )
-                    for blok in veri["cevrilecek_bloklar"]
-                }
+                konumlar = {blok["id"]: blok.get("kaynak_bboxlar", [])
+                            for blok in kaynak_bloklari}
 
                 for blok in ceviriler:
                     blok["kaynak_bboxlar"] = (
@@ -842,6 +955,8 @@ def main():
         tum_ceviriler,
         tum_tablolar
     )
+
+    eksik_ceviri_kontrol_raporu_yaz(pdf_yolu, tum_ceviriler, tum_tablolar)
 
     maliyet_raporu_yaz(dosya_adi, toplam_sayfa, sayfa_kullanim, sayfa_duzeltmeler)
 
