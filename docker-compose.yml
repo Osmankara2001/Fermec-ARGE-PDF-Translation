@@ -39,8 +39,8 @@ services:
   
   pdf-isleyici:
     build:
-      context: .
-      dockerfile: Dockerfile.pdf-isleyici
+      context: ./pdf-isleyici
+      dockerfile: Dockerfile
     container_name: fermec-pdf-isleyici
     ports:
       - "8002:8002"
