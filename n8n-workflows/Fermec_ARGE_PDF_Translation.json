@@ -1,0 +1,283 @@
+{
+  "name": "Fermec ARGE | PDF Translation",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -240,
+        -352
+      ],
+      "id": "c4959749-0b76-4fbb-b897-a6725305b688",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://pdf-isleyici:8002/run",
+        "options": {
+          "timeout": 7200000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        -240,
+        -112
+      ],
+      "id": "3c753cc3-8acd-4de0-94de-73efad2d8150",
+      "name": "HTTP Request",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 4
+          },
+          "conditions": [
+            {
+              "id": "b07f6844-ca44-474e-b441-d7d85b08148a",
+              "leftValue": "={{ $json.durum }}",
+              "rightValue": "tamamlandi",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.4,
+      "position": [
+        -240,
+        176
+      ],
+      "id": "df4c6e0c-dafe-40eb-952c-76f1d73b3692",
+      "name": "03 | İşlem Sonucunu Doğrula"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "2281e478-3609-4c13-b2eb-4452cb13db0c",
+              "name": "durum",
+              "value": "basarisiz",
+              "type": "string"
+            },
+            {
+              "id": "2a8c874d-4c17-4d1b-b223-c189fea459e9",
+              "name": "mesaj",
+              "value": "PDF işleme işlemi başarısız oldu veya beklenmeyen sonuç döndürdü.",
+              "type": "string"
+            },
+            {
+              "id": "5bdda952-9a82-4998-a699-081f5a4e12f3",
+              "name": "is_akisi",
+              "value": "Fermec ARGE - PDF Translation Pipeline",
+              "type": "string"
+            },
+            {
+              "id": "1d1ed1b2-37d6-4251-a477-ab333852b6af",
+              "name": "hata_detayi",
+              "value": "={{ $json.error?.message || $json.kayit || $json.mesaj || 'İşlem sonucu doğrulanamadı.' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        32,
+        304
+      ],
+      "id": "780210d7-e4c9-4f23-9490-22ed6afbf436",
+      "name": "05 | Başarısız İşlem Raporu"
+    },
+    {
+      "parameters": {
+        "errorMessage": "={{ $json.hata_detayi }}"
+      },
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        240,
+        304
+      ],
+      "id": "d03d57de-8fd8-4af4-81e7-08b1ec3d36cf",
+      "name": "06 | İşlemi Hata ile Sonlandır"
+    },
+    {
+      "parameters": {
+        "content": "### 01 — İş Akışının Başlatılması ve Servis Çağrısı\n\n**Manual Trigger (Manuel Tetikleyici)**\n\nPDF çeviri otomasyonunu kullanıcı komutuyla başlatır. Geliştirme ve test aşamalarında kontrollü çalıştırma yapılmasını sağlar.\n\n**HTTP Request (PDF İşleme İsteği)**\n\nDocker ağı üzerinden Python tabanlı PDF işleme servisine HTTP POST isteği gönderir.\n\n- **Metot:** POST\n- **Servis:** `http://pdf-isleyici:8002/run`\n- **Görev:** PDF işleme sürecini başlatmak\n\n**Arka planda gerçekleştirilen işlemler:**\n\nPDF analizi, 5 sayfalık pencereleme, LangGraph ve OpenAI API ile çeviri, tablo ve görsel işleme, formül koruma ve Türkçe–İngilizce çift dilli PDF oluşturma.\n\n*Not: Bu işlemler n8n içerisinde değil, n8n tarafından çağrılan Python servislerinde gerçekleştirilir.*\n",
+        "height": 352,
+        "width": 624,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -960,
+        -352
+      ],
+      "typeVersion": 1,
+      "id": "2968fece-876c-4dba-bf30-e3c1e36cf46c",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "### 02 — İşlem Sonucunun Doğrulanması\n\n**IF (Koşullu Yönlendirme)**\n\nPDF işleme servisinden dönen JSON yanıtını değerlendirerek iş akışını başarı veya hata yoluna yönlendirir.\n\n**Kontrol koşulu:**\n\n`{{ $json.durum }}` → `tamamlandi`\n\n**True (Başarılı):**\n\nServis yanıtındaki `durum` alanı `tamamlandi` ise işlem, başarılı raporlama düğümüne yönlendirilir.\n\n**False (Başarısız):**\n\nYanıt beklenen değerden farklıysa, işlem hata raporlama düğümüne yönlendirilir.\n\n**Teknik not:** Bu kontrol, servisin bildirdiği durumu değerlendirir. Çeviri içeriğinin eksiksizliğini veya doğruluğunu bağımsız olarak doğrulamaz. İç servis hatalarının doğru raporlanması için ek kontroller planlanmaktadır.",
+        "height": 384,
+        "width": 528
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -848,
+        96
+      ],
+      "typeVersion": 1,
+      "id": "037e1fcd-ca65-49f3-9fd7-f50903c51141",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "content": "### 03 — İşlem Raporlama ve Hata Yönetimi\n\n**04 | Başarılı İşlem Raporu — Edit Fields (Set)**\n\nIF düğümünün True çıkışından gelen verileri yapılandırılmış JSON formatında düzenler.\n\n- İşlem durumunu `basarili` olarak işaretler.\n- İş akışının adını ve açıklayıcı mesajını ekler.\n- PDF işleme servisinden gelen işlem kaydını rapora aktarır.\n\n**05 | Başarısız İşlem Raporu — Edit Fields (Set)**\n\nIF düğümünün False çıkışında çalışarak beklenmeyen servis yanıtlarını raporlar.\n\n- İşlem durumunu `basarisiz` olarak işaretler.\n- Hata açıklamasını oluşturur.\n- Servisten gelen hata veya işlem kaydını rapora ekler.\n\n**06 | İşlemi Hata ile Sonlandır — Stop And Error**\n\nHata raporundan gelen açıklamayı kullanarak n8n çalıştırmasını başarısız olarak sonlandırır.\n\n**Sonuç:** İş akışı, servis yanıtına göre başarılı ve başarısız işlemleri ayrı dallarda ele alır.\n\n**Mevcut sınır:** HTTP bağlantı hatalarının yakalanması ve Python servisindeki iç çeviri hatalarının doğru durum koduyla bildirilmesi için ek geliştirmeler planlanmaktadır.",
+        "height": 512,
+        "width": 496,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        240,
+        -240
+      ],
+      "typeVersion": 1,
+      "id": "8b2601e1-e9ec-4979-92d7-bd5d3837ee48",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "fcee94af-27bc-4767-8a14-c02ea74bf234",
+              "name": "durum",
+              "value": "basarili",
+              "type": "string"
+            },
+            {
+              "id": "66dda7c7-b778-4158-81fb-69db41b1590b",
+              "name": "mesaj",
+              "value": "PDF işleme servisi tamamlandı.",
+              "type": "string"
+            },
+            {
+              "id": "5ecc7151-dfee-43db-8d3c-0e0e32180a07",
+              "name": "is_akisi",
+              "value": "Fermec ARGE - PDF Translation Pipeline",
+              "type": "string"
+            },
+            {
+              "id": "1f864002-e36f-40ef-82f2-b09006d6b12f",
+              "name": "islem_kaydi",
+              "value": "={{ $json.kayit }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        32,
+        64
+      ],
+      "id": "be75336d-fe22-4a10-87cc-3f158e9a251b",
+      "name": "04 | Başarılı İşlem Raporu"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "03 | İşlem Sonucunu Doğrula",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "05 | Başarısız İşlem Raporu",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "03 | İşlem Sonucunu Doğrula": {
+      "main": [
+        [
+          {
+            "node": "04 | Başarılı İşlem Raporu",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "05 | Başarısız İşlem Raporu",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "05 | Başarısız İşlem Raporu": {
+      "main": [
+        [
+          {
+            "node": "06 | İşlemi Hata ile Sonlandır",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "bfe8b90a-2a7c-4410-b697-4756b8f136de",
+  "meta": {
+    "instanceId": "b06701ab2e2433492ca7dfcf996b8c1bd429732c45df1284f0bd0012e4d6d0bc"
+  },
+  "nodeGroups": [],
+  "id": "oV9LRYTwdJq2BQsh",
+  "tags": []
+}
