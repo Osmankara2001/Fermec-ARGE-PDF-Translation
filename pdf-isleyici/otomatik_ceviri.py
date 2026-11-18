@@ -125,7 +125,7 @@ def dosya_sha256(yol):
 def sayfa_checkpoint_kaydet(dosya_adi, kaynak_sha256, toplam_sayfa,
                            sayfa_no, ceviriler, tablolar, kullanim, duzeltmeler):
     """Tamamlanan sayfayi ayni klasorde gecici dosya + atomik rename ile kaydeder."""
-    hedef_klasor = pdf_klasorlerini_hazirla(dosya_adi)["checkpoints"]
+    hedef_klasor = OUTPUT / "checkpoints" / Path(dosya_adi).stem
     hedef_klasor.mkdir(parents=True, exist_ok=True)
     hedef = hedef_klasor / f"page_{sayfa_no:04d}.json"
     kayit = {
