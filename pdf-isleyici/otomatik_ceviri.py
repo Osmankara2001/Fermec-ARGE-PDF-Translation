@@ -21,6 +21,29 @@ OUTPUT = Path(os.getenv("OUTPUT_DIR", "output"))
 OUTPUT.mkdir(exist_ok=True)
 
 
+def pdf_klasorlerini_hazirla(dosya_adi):
+    """
+    Her PDF icin ayri bir sonuc klasoru olusturur.
+    """
+
+    pdf_adi = Path(dosya_adi).stem
+
+    ana_klasor = OUTPUT / pdf_adi
+
+    klasorler = {
+        "ana": ana_klasor,
+        "reports": ana_klasor / "reports",
+        "windows": ana_klasor / "windows",
+        "data": ana_klasor / "data",
+    }
+
+    for klasor in klasorler.values():
+        klasor.mkdir(parents=True, exist_ok=True)
+
+    return klasorler
+
+
+
 # Toplam 4 istek: ilk deneme + en fazla 3 yeniden deneme.
 RETRY_BEKLEMELERI = (2, 4, 8)
 RETRY_HTTP_KODLARI = {408, 429, 500, 502, 503, 504}
@@ -102,7 +125,7 @@ def dosya_sha256(yol):
 def sayfa_checkpoint_kaydet(dosya_adi, kaynak_sha256, toplam_sayfa,
                            sayfa_no, ceviriler, tablolar, kullanim, duzeltmeler):
     """Tamamlanan sayfayi ayni klasorde gecici dosya + atomik rename ile kaydeder."""
-    hedef_klasor = OUTPUT / "checkpoints" / Path(dosya_adi).stem
+    hedef_klasor = pdf_klasorlerini_hazirla(dosya_adi)["checkpoints"]
     hedef_klasor.mkdir(parents=True, exist_ok=True)
     hedef = hedef_klasor / f"page_{sayfa_no:04d}.json"
     kayit = {
@@ -269,7 +292,7 @@ def izlenebilirlik_raporu_yaz(dosya_adi, toplam_sayfa, tum_ceviriler, tum_tablol
         ),
         "sayfalar": sayfalar,
     }
-    hedef = OUTPUT / f"{Path(dosya_adi).stem}_izlenebilirlik.json"
+    hedef = pdf_klasorlerini_hazirla(dosya_adi)["reports"] / f"{Path(dosya_adi).stem}_izlenebilirlik.json"
     with hedef.open("w", encoding="utf-8") as dosya:
         json.dump(rapor, dosya, ensure_ascii=False, indent=2)
     print(f"Izlenebilirlik raporu kaydedildi: {hedef}", flush=True)
@@ -367,7 +390,7 @@ def maliyet_raporu_yaz(dosya_adi, toplam_sayfa, sayfa_kullanim, sayfa_duzeltmele
         "uyari": "Fiyatlar OPENAI_* ortam degiskenleriyle verilmeli; model eslesmeli. Tablo servisinin ayri API maliyetleri dahil olmayabilir. API hatalarinda tamamlanmayan cagri maliyetleri raporlanmaz.",
         "sayfalar": sayfalar,
     }
-    hedef = OUTPUT / f"{Path(dosya_adi).stem}_maliyet_raporu.json"
+    hedef = pdf_klasorlerini_hazirla(dosya_adi)["reports"] / f"{Path(dosya_adi).stem}_maliyet_raporu.json"
     with hedef.open("w", encoding="utf-8") as dosya:
         json.dump(rapor, dosya, ensure_ascii=False, indent=2)
     print(f"Maliyet raporu kaydedildi: {hedef}", flush=True)
@@ -380,7 +403,7 @@ def eksik_ceviri_kontrol_raporu_yaz(pdf_yolu, tum_ceviriler, tum_tablolar):
     Taranmis sayfalarda kaynak metin secilemiyorsa kesin eksik demek yerine
     manuel inceleme onerir.
     """
-    cikti_yolu = OUTPUT / f"{Path(pdf_yolu).stem}_TR_EN.pdf"
+    cikti_yolu = pdf_klasorlerini_hazirla(pdf_yolu)["ana"] / f"{Path(pdf_yolu).stem}_TR_EN.pdf"
     sayfalar = []
     with pymupdf.open(pdf_yolu) as kaynak, pymupdf.open(cikti_yolu) as cikti:
         if len(kaynak) != len(cikti):
@@ -429,7 +452,7 @@ def eksik_ceviri_kontrol_raporu_yaz(pdf_yolu, tum_ceviriler, tum_tablolar):
         "aciklama": "Yalnizca eksik metin/yerlestirme taramasi. OCR ve ceviri anlami kontrol edilmez; metin varligi tamlik garantisi degildir.",
         "sayfalar": sayfalar,
     }
-    hedef = OUTPUT / f"{Path(pdf_yolu).stem}_eksik_ceviri_kontrol.json"
+    hedef = pdf_klasorlerini_hazirla(pdf_yolu)["reports"] / f"{Path(pdf_yolu).stem}_eksik_ceviri_kontrol.json"
     with hedef.open("w", encoding="utf-8") as dosya:
         json.dump(rapor, dosya, ensure_ascii=False, indent=2)
     print(f"Eksik ceviri kontrol raporu: {hedef}", flush=True)
@@ -679,11 +702,12 @@ def cift_dilli_pdf_uret(pdf_yolu, tum_ceviriler,tum_tablolar):
                     "Eksik PDF olusturulmasi engellendi."
                 )
 
-    OUTPUT.mkdir(exist_ok=True)
-
-    cikti_yolu = OUTPUT / (
-        f"{Path(pdf_yolu).stem}_TR_EN.pdf"
+    
+    cikti_yolu = (
+        pdf_klasorlerini_hazirla(pdf_yolu)["ana"]
+        / f"{Path(pdf_yolu).stem}_TR_EN.pdf"
     )
+
 
     cikti.save(cikti_yolu)
     cikti.close()
@@ -702,6 +726,9 @@ def main():
 
     dosya_adi = analiz["dosya"]
     toplam_sayfa = analiz["toplam_sayfa"]
+    klasorler = pdf_klasorlerini_hazirla(dosya_adi)
+
+    print(f"PDF sonuc klasoru: {klasorler['ana']}")
 
     print(f"PDF: {dosya_adi}")
     print(f"Toplam sayfa: {toplam_sayfa}")
@@ -896,10 +923,12 @@ def main():
             )
         }
 
-        pencere_dosyasi = OUTPUT / (
+        
+        pencere_dosyasi = pdf_klasorlerini_hazirla(dosya_adi)["windows"] / (
             f"pencere_{pencere_baslangic:04d}_"
             f"{pencere_bitis:04d}.json"
         )
+
 
         with open(
             pencere_dosyasi, "w", encoding="utf-8"
@@ -920,7 +949,7 @@ def main():
         )
 
 
-    tablo_ciktisi = OUTPUT / "otomatik_tablolar.json"
+    tablo_ciktisi = pdf_klasorlerini_hazirla(dosya_adi)["data"] / "otomatik_tablolar.json"
 
     with open(
         tablo_ciktisi, "w", encoding="utf-8"
@@ -935,7 +964,7 @@ def main():
     print(f"Tablolar kaydedildi: {tablo_ciktisi}")
 
     # Tum sayfalarin cevirilerini JSON olarak kaydet.
-    cikti = OUTPUT / "otomatik_ceviriler.json"
+    cikti = pdf_klasorlerini_hazirla(dosya_adi)["data"] / "otomatik_ceviriler.json"
 
     with open(
         cikti, "w", encoding="utf-8"

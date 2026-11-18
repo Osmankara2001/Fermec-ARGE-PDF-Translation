@@ -604,9 +604,19 @@ def pdf_tablolarini_cikar(
 
                 for sutun_no in range(sutun_sayisi):
                     indeks = (
-                        sutun_no * satir_sayisi
-                        + satir_no
+                        satir_no * sutun_sayisi
+                        + sutun_no
                     )
+
+                    if indeks >= len(hucre_verileri):
+                        print(
+                            f"UYARI: Sayfa {sayfa_no}, "
+                            f"tablo {tablo_no}, "
+                            f"satir {satir_no + 1}, "
+                            f"sutun {sutun_no + 1}: "
+                            "Hucre verisi eksik."
+                        )
+                        continue
 
                     hucre = hucre_verileri[indeks]
 
