@@ -11,9 +11,11 @@ RUN pip install --no-cache-dir \
     fastapi \
     "uvicorn[standard]" \
     requests \
-    pymupdf
+    pymupdf \
+    openai
 
 COPY otomatik_ceviri.py .
+COPY kalite_denetimi.py .
 COPY tablo_isleyici.py .
 COPY tablo_cizici.py .
 COPY gorsel_yerlestirici.py .

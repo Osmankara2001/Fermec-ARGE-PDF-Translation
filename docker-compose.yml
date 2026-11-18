@@ -45,6 +45,8 @@ services:
     ports:
       - "8002:8002"
     environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_QA_MODEL=${OPENAI_QA_MODEL:-gpt-5.4-mini}
       - OPENAI_PRICING_MODEL=gpt-6-luna
       - OPENAI_INPUT_USD_PER_MILLION=0.10
       - OPENAI_CACHED_INPUT_USD_PER_MILLION=0.01

@@ -997,7 +997,31 @@ def main():
         sayfa_kullanim,
         sayfa_duzeltmeler,
     )
+    
+    kalite_denetimini_calistir(klasorler)
+def kalite_denetimini_calistir(klasorler):
+    from kalite_denetimi import kalite_raporu_uret
 
+    ceviri_json = klasorler["data"] / "otomatik_ceviriler.json"
+    tablo_json = klasorler["data"] / "otomatik_tablolar.json"
+    rapor_yolu = klasorler["reports"] / (f"{klasorler['ana'].name}_ceviri_kalite_raporu.json")
+
+    try:
+        print("\n=== AI KALITE DENETIMI BASLADI ===", flush=True)
+
+        kalite_raporu_uret(
+            ceviri_json,
+            tablo_json,
+            rapor_yolu,
+        )
+
+        print("AI kalite denetimi tamamlandi.", flush=True)
+
+    except Exception as hata:
+        print(
+            f"UYARI: AI kalite denetimi basarisiz: {hata}",
+            flush=True,
+        )
 
 if __name__ == "__main__":
     main()
