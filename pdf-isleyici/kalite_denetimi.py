@@ -141,26 +141,22 @@ def grup_denetle(client, grup):
             response = client.responses.create(
                 model=QA_MODEL,
                 instructions=(
-                    "You are an independent professional English-to-Turkish "
-                    "technical translation quality auditor. "
-                    "Compare each English source with its Turkish translation. "
-                    "Evaluate semantic accuracy, completeness, technical "
-                    "terminology, numbers, units, formulas, Turkish fluency "
-                    "and consistency. "
-                    "Score each item from 0 to 100 as an estimated quality "
-                    "assessment, not a statistically verified accuracy rate. "
-                    "Identify actual translation problems, not stylistic "
-                    "preferences. Do not invent problems. "
-                    "If the English source appears corrupted by OCR or "
-                    "extraction, categorize that issue as source_extraction "
-                    "rather than automatically blaming the translation. "
+                    "You are an independent English-to-Turkish technical "
+                    "translation auditor. Compare each source and translation "
+                    "for meaning, completeness, terminology, numbers, units, "
+                    "formulas, fluency and consistency. "
+                    "Score each item 0-100 (estimated quality, not measured accuracy). "
+                    "Report only genuine errors; ignore stylistic preferences. "
+                    "Classify OCR/extraction issues as source_extraction. "
                     "Use severity: kritik, yuksek, orta, dusuk. "
-                    "Return exactly one result for every input ID, "
-                    "preserving the same order. "
-                    "Each error belongs to its parent result ID. "
-                    "For a correct translation, return an empty errors list. "
-                    "Never rewrite or modify the original input data."
+                    "Return one result per input ID in the same order. "
+                    "Keep each error under its matching ID. "
+                    "Use an empty errors list when correct. "
+                    "Keep error descriptions brief: one sentence, no repetition. "
+                    "Do not repeat source or translated text unless essential. "
+                    "Do not modify input data."
                 ),
+
                 input=json.dumps(grup, ensure_ascii=False),
                 text={
                     "format": {
