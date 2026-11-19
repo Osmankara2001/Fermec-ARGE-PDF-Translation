@@ -12,6 +12,7 @@ from openai import OpenAI
 
 QA_MODEL = os.getenv("OPENAI_QA_MODEL", "gpt-5.4-mini")
 QA_BATCH_CHARS = max(1000, int(os.getenv("OPENAI_QA_BATCH_CHARS", "12000")))
+QA_BATCH_MAX_ITEMS = max(1, int(os.getenv("OPENAI_QA_BATCH_MAX_ITEMS", "20")))
 QA_MAX_OUTPUT_TOKENS = int(os.getenv("OPENAI_QA_MAX_OUTPUT_TOKENS", "5000"))
 
 
@@ -68,7 +69,10 @@ def gruplara_ayir(kayitlar):
     for kayit in kayitlar:
         uzunluk = len(json.dumps(kayit, ensure_ascii=False))
 
-        if grup and boyut + uzunluk > QA_BATCH_CHARS:
+        if grup and (
+            boyut + uzunluk > QA_BATCH_CHARS
+            or len(grup) >= QA_BATCH_MAX_ITEMS
+        ):
             yield grup
             grup = []
             boyut = 0
@@ -84,7 +88,6 @@ def qa_semasi():
     hata = {
         "type": "object",
         "properties": {
-            "id": {"type": "string"},
             "kategori": {"type": "string"},
             "onem": {
                 "type": "string",
@@ -94,7 +97,7 @@ def qa_semasi():
             "onerilen_ceviri": {"type": "string"},
         },
         "required": [
-            "id", "kategori", "onem",
+            "kategori", "onem",
             "aciklama", "onerilen_ceviri"
         ],
         "additionalProperties": False,
@@ -154,7 +157,7 @@ def grup_denetle(client, grup):
                     "Use severity: kritik, yuksek, orta, dusuk. "
                     "Return exactly one result for every input ID, "
                     "preserving the same order. "
-                    "Every reported error must reference its input ID. "
+                    "Each error belongs to its parent result ID. "
                     "For a correct translation, return an empty errors list. "
                     "Never rewrite or modify the original input data."
                 ),
@@ -195,10 +198,6 @@ def grup_denetle(client, grup):
                     f"Denetim ID uyusmazligi: {beklenen} != {gelen}"
                 )
 
-            for madde in sonuc:
-                for hata in madde["hatalar"]:
-                    if hata["id"] != madde["id"]:
-                        raise ValueError("Hata ID'si kayit ID'siyle eslesmiyor.")
 
             return sonuc, kullanimlar
 
@@ -293,6 +292,7 @@ def kalite_raporu_uret(ceviri_json, tablo_json, rapor_yolu):
                     "tur": kayit["tur"],
                     "kaynak_metin": kayit["kaynak"],
                     "mevcut_ceviri": kayit["ceviri"],
+                    "id": kayit["id"],
                     **hata,
                 })
                 hata_sayisi += 1
